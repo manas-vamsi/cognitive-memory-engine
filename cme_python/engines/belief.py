@@ -34,6 +34,16 @@ _MARKER = re.compile(r"^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s+)")
 MIN_WORDS = 4
 """Below this a fragment is a heading or a list bullet, not a claim."""
 
+MIN_CLAIM_WORDS = 3
+"""Lower than MIN_WORDS, and deliberately so.
+
+MIN_WORDS decides whether a line of a document is worth extracting at all.
+This decides whether a *part* of an already-accepted claim stands alone, and
+"Rust is fast." is a complete claim at three words. Reusing the extraction
+threshold here would refuse to split exactly the short, sharp claims that are
+easiest to verify.
+"""
+
 Extractor = Callable[[str], list[str]]
 
 
@@ -97,6 +107,98 @@ def rule_based_extract(text: str) -> list[str]:
     return claims
 
 
+_JOIN = re.compile(r"\s*;\s+|,?\s+\band\b\s+|,?\s+\bbut\b\s+", re.I)
+_VERBS = frozenset(
+    [
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "has",
+        "have",
+        "had",
+        "can",
+        "could",
+        "will",
+        "would",
+        "may",
+        "might",
+        "must",
+        "should",
+        "does",
+        "do",
+        "did",
+        "gives",
+        "give",
+        "provides",
+        "provide",
+        "uses",
+        "use",
+        "requires",
+        "require",
+        "supports",
+        "support",
+        "allows",
+        "allow",
+        "needs",
+        "need",
+        "holds",
+        "hold",
+        "runs",
+        "run",
+    ]
+)
+"""Deliberately a closed list of auxiliaries and common verbs.
+
+Guessing at verbs by suffix is what breaks this: "Rust gives zero-cost
+abstractions and guaranteed thread safety" would split on "guaranteed" and
+produce the nonsense "Rust guaranteed thread safety". A short explicit list
+splits less and never mangles.
+"""
+
+
+def split_claims(statement: str) -> list[str]:
+    """The independent claims inside a statement, or `[]` if there is only one.
+
+    Conservative on purpose: a missed split leaves a belief slightly coarse,
+    while a wrong split invents a claim nobody made. Every part must contain a
+    recognised verb, and a part that starts with one inherits the subject of the
+    part before it — otherwise "Rust is fast and has no GC" would yield the
+    fragment "has no GC".
+
+    ponytail: closed verb list and a regex, no parser. An LLM extractor or a
+    dependency parse is the upgrade; this handles the common conjunction.
+    """
+    body = statement.rstrip(".!?")
+    pieces = [p.strip() for p in _JOIN.split(body) if p.strip()]
+    if len(pieces) < 2:
+        return []
+
+    subject = _subject_of(pieces[0])
+    claims = []
+    for piece in pieces:
+        words = piece.split()
+        if not any(w.lower().strip(",") in _VERBS for w in words):
+            return []  # a part with no verb is a phrase, not a claim
+        if words[0].lower() in _VERBS and subject:
+            piece = f"{subject} {piece}"
+        if len(piece.split()) < MIN_CLAIM_WORDS:
+            return []
+        claims.append(piece[0].upper() + piece[1:] + ".")
+    return claims
+
+
+def _subject_of(piece: str) -> str:
+    """Everything before the first verb — carried onto parts that lack one."""
+    words = piece.split()
+    for i, word in enumerate(words):
+        if word.lower().strip(",") in _VERBS:
+            return " ".join(words[:i])
+    return ""
+
+
 def normalise(statement: str) -> str:
     """Comparison key for duplicate detection — case, punctuation, spacing ignored."""
     return " ".join(_NORMALISE.sub(" ", statement.lower()).split())
@@ -152,6 +254,31 @@ class BeliefEngine:
         for b in filed.values():
             self.store.save(b)
         return list(filed.values())
+
+    def split(self, belief: Belief) -> list[Belief]:
+        """Break a multi-claim belief into one belief per claim, in the registry.
+
+        Returns the beliefs now on record — the parts if it split, otherwise the
+        original untouched. The original is removed only when it is genuinely
+        replaced, so a no-op split cannot lose a belief.
+        """
+        claims = split_claims(belief.statement)
+        if not claims:
+            return [belief]
+        parts = belief.split(*claims)
+        for part in parts:
+            self.store.save(part)
+        self.store.delete(belief.id)
+        return parts
+
+    def split_all(self) -> list[Belief]:
+        """Sweep the registry, splitting every belief that carries two claims."""
+        changed = []
+        for belief in self.store.all():
+            parts = self.split(belief)
+            if parts != [belief]:
+                changed.extend(parts)
+        return changed
 
     def _find_duplicate(self, statement: str, key: str) -> Belief | None:
         """Look for an existing belief with the same normalised statement.

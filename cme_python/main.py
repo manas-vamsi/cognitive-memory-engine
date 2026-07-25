@@ -104,6 +104,12 @@ def verify(request: VerifyRequest) -> GroundingReport:
     return get_engine().verify(request.answer, tier=request.tier, scope=request.scope)
 
 
+@app.post("/split", response_model=list[Belief])
+def split() -> list[Belief]:
+    """Break multi-claim beliefs apart so each can be judged on its own."""
+    return get_engine().beliefs.split_all()
+
+
 @app.get("/memory", response_model=MemoryStats)
 def memory() -> MemoryStats:
     """How much is remembered, broken down by tier."""
