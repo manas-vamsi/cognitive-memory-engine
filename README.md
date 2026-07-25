@@ -276,6 +276,28 @@ A claim is only grounded if a belief is both **relevant** to it and **covers**
 it. Sharing a subject word is not evidence — that is why *"Qubits are powered by
 steam"* fails against a registry full of qubit facts.
 
+### Retrieval: lexical or vector
+
+```bash
+CME_RETRIEVAL=vector   # default: lexical
+```
+
+Lexical TF-IDF matches words, so `requests` and `requesting` are strangers.
+The vector backend embeds beliefs (hashing trick over words, stems and
+character n-grams) and ranks by cosine similarity, which closes that gap
+without a model download, a server, or a network call.
+
+Be clear about what it does buy: **morphological** recall, not synonymy.
+*"requesting a webpage"* finds *"web request in Python"* because they share
+stems, not because anything understands them. True paraphrase needs real
+embeddings — swap a sentence transformer in behind the `Embedder` protocol and
+Qdrant behind `VectorIndex`; neither the Evidence Engine nor its callers change.
+
+Two thresholds here are measured rather than chosen, and both are load-bearing:
+at 256 dimensions hash collisions scored *"cricket scores in 1998"* at 0.23
+against a belief about HTTP — beating genuine matches — so unrelated text has
+to stay clearly below the floor. A test pins the margin.
+
 ### Optional Rust core
 
 Graph traversal is the hot path, so it also exists as a Rust extension
