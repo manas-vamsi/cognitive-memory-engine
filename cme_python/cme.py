@@ -18,10 +18,11 @@ from cme_python.config import settings
 from cme_python.engines.belief import BeliefEngine
 from cme_python.engines.evidence import EvidenceEngine, GroundingReport, Justification
 from cme_python.engines.graph import KnowledgeGraph
+from cme_python.engines.memory import MemoryEngine, MemoryStats
 from cme_python.engines.optimization import OptimizationEngine
 from cme_python.engines.quantum_layer import get_solver
 from cme_python.engines.reasoning import Contradiction, ReasoningEngine
-from cme_python.models import Belief, SourceKind
+from cme_python.models import Belief, MemoryTier, SourceKind
 from cme_python.store import BeliefStore
 
 
@@ -63,6 +64,7 @@ class CME:
             self.evidence, solver=get_solver(solver or settings.solver)
         )
         self.reasoning = ReasoningEngine(self.store)
+        self.memory = MemoryEngine(self.store)
 
     def __enter__(self) -> CME:
         return self
@@ -86,18 +88,32 @@ class CME:
         source: SourceKind = SourceKind.UNKNOWN,
         locator: str | None = None,
         connections: Iterable[str] = (),
+        tier: MemoryTier = MemoryTier.GENERAL,
+        scope: str | None = None,
     ) -> list[Belief]:
         """Learn from a document. Re-ingesting reinforces rather than duplicates."""
-        return self.beliefs.ingest(text, source=source, locator=locator, connections=connections)
+        filed = self.beliefs.ingest(text, source=source, locator=locator, connections=connections)
+        return self.memory.remember(filed, tier=tier, scope=scope)
 
-    def context(self, query: str, *, budget: float | None = None) -> GroundedContext:
+    def context(
+        self,
+        query: str,
+        *,
+        budget: float | None = None,
+        tier: MemoryTier | None = None,
+        scope: str | None = None,
+    ) -> GroundedContext:
         """The best set of memories for a query, within a token budget.
 
         Not a top-k slice: the Optimization Engine trades relevance against
         redundancy so the budget buys distinct facts rather than the same one
-        three times.
+        three times. `tier` and `scope` confine recall to one body of memory.
         """
-        chosen = self.optimizer.select(query, budget=budget or settings.context_budget)
+        chosen = self.optimizer.select(
+            query,
+            budget=budget or settings.context_budget,
+            within=self.memory.view(tier, scope).matches if tier or scope else None,
+        )
         return GroundedContext(
             query=query,
             beliefs=chosen,
@@ -105,9 +121,24 @@ class CME:
             tokens=sum(self.optimizer.cost(b) for b in chosen),
         )
 
-    def verify(self, answer: str) -> GroundingReport:
-        """Check generated text against the registry, claim by claim."""
-        return self.evidence.ground(answer)
+    def verify(
+        self,
+        answer: str,
+        *,
+        tier: MemoryTier | None = None,
+        scope: str | None = None,
+    ) -> GroundingReport:
+        """Check generated text against the registry, claim by claim.
+
+        Verifying inside the same slice the answer was drawn from matters: a
+        claim backed only by another tier is not backed for this caller.
+        """
+        return self.evidence.ground(
+            answer, within=self.memory.view(tier, scope).matches if tier or scope else None
+        )
+
+    def stats(self) -> MemoryStats:
+        return self.memory.stats()
 
     # --- inspection --------------------------------------------------------
 

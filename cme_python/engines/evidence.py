@@ -190,14 +190,25 @@ class EvidenceEngine:
 
     # --- retrieval ---------------------------------------------------------
 
-    def retrieve(self, query: str, limit: int = 5) -> list[tuple[Belief, float]]:
+    def retrieve(
+        self,
+        query: str,
+        limit: int = 5,
+        *,
+        within: Callable[[Belief], bool] | None = None,
+    ) -> list[tuple[Belief, float]]:
         """Beliefs bearing on a query, best first, as (belief, relevance).
 
         Relevance is TF-IDF overlap scaled by the belief's own confidence — a
         perfectly matching but disbelieved statement should not win.
+
+        `within` restricts recall to a slice of memory (see `MemoryEngine.view`).
+        It is applied before the limit, so scoping cannot be defeated by an
+        out-of-scope belief crowding the top of the list.
         """
         if self._retriever is not None:
-            return self._retriever(query, limit)
+            hits = self._retriever(query, limit)
+            return [(b, r) for b, r in hits if within is None or within(b)]
         self._fresh_index()
         terms = tokenise(query)
         if not terms:
@@ -210,6 +221,8 @@ class EvidenceEngine:
                 continue
             belief = self.store.get(belief_id)
             if belief is None:  # deleted between index and read
+                continue
+            if within is not None and not within(belief):
                 continue
             relevance = (overlap / math.sqrt(length)) * belief.confidence
             scored.append((belief, round(relevance, 6)))
@@ -235,6 +248,7 @@ class EvidenceEngine:
         *,
         threshold: float = SUPPORTED_AT,
         coverage_at: float = COVERAGE_AT,
+        within: Callable[[Belief], bool] | None = None,
     ) -> ClaimCheck:
         """Is this one sentence backed by something the engine knows?
 
@@ -242,7 +256,7 @@ class EvidenceEngine:
         claim, and it has to *cover* the claim. Relevance alone lets a false
         sentence through on a shared subject word.
         """
-        hits = self.retrieve(claim, limit=1)
+        hits = self.retrieve(claim, limit=1, within=within)
         if not hits:
             return ClaimCheck(claim=claim, supported=False, relevance=0.0)
         belief, relevance = hits[0]
@@ -266,13 +280,21 @@ class EvidenceEngine:
         )
         return round(len(wanted & set(known)) / len(wanted), 6)
 
-    def ground(self, text: str, *, threshold: float = SUPPORTED_AT) -> GroundingReport:
+    def ground(
+        self,
+        text: str,
+        *,
+        threshold: float = SUPPORTED_AT,
+        within: Callable[[Belief], bool] | None = None,
+    ) -> GroundingReport:
         """Check generated text claim by claim against the registry.
 
         This is the hallucination guard: anything in `report.unsupported` is a
         sentence the engine cannot back with a stored belief.
         """
-        return GroundingReport(checks=[self.check(c, threshold=threshold) for c in claims_in(text)])
+        return GroundingReport(
+            checks=[self.check(c, threshold=threshold, within=within) for c in claims_in(text)]
+        )
 
 
 def claims_in(text: str) -> list[str]:

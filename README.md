@@ -234,6 +234,27 @@ A claim is only grounded if a belief is both **relevant** to it and **covers**
 it. Sharing a subject word is not evidence — that is why *"Qubits are powered by
 steam"* fails against a registry full of qubit facts.
 
+### Memory is tiered, and recall is scoped
+
+Beliefs live in one of `general`, `user`, `scientific`, `organizational`, or
+`project` memory, with a `scope` naming the owner inside a tier.
+
+```python
+from cme_python.models import MemoryTier
+
+cme.ingest("Alice is allergic to penicillin.", tier=MemoryTier.USER, scope="alice")
+cme.ingest("Bob is allergic to shellfish.", tier=MemoryTier.USER, scope="bob")
+
+cme.context("allergic", tier=MemoryTier.USER, scope="alice")  # only Alice's record
+cme.verify(answer, tier=MemoryTier.USER, scope="alice")  # verified in that slice
+```
+
+This is a correctness boundary, not filing tidiness. A clinical assistant must
+not answer from another patient's history, and one team's convention is not a
+universal fact. Scoping is applied **before** the result limit, so an
+out-of-scope belief cannot crowd the list and leak through — and verification is
+scoped too, because a claim backed only by another tier is not backed here.
+
 ### In front of any model
 
 Any object with `complete(prompt, system=None) -> str` is a client, so no SDK is

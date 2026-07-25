@@ -35,6 +35,21 @@ class SourceKind(StrEnum):
     UNKNOWN = "unknown"
 
 
+class MemoryTier(StrEnum):
+    """Which body of memory a belief belongs to.
+
+    The tiers are separate so recall can be scoped: a clinical assistant should
+    not answer from another patient's history, and a project assistant should
+    not treat one team's conventions as universal fact.
+    """
+
+    GENERAL = "general"
+    USER = "user"
+    SCIENTIFIC = "scientific"
+    ORGANIZATIONAL = "organizational"
+    PROJECT = "project"
+
+
 class Evidence(BaseModel):
     """A verifiable source snippet that supports or contradicts a belief."""
 
@@ -60,6 +75,15 @@ class Belief(BaseModel):
     connections: set[str] = Field(default_factory=set)
     """Concept labels or belief ids this belief is semantically linked to."""
     source: SourceKind = SourceKind.UNKNOWN
+    tier: MemoryTier = MemoryTier.GENERAL
+    scope: str | None = None
+    """Owner within the tier — a user id, project name, or organisation.
+
+    Two projects both storing "we deploy on Fridays" are different memories, not
+    a contradiction; the tier says what kind of memory it is and the scope says
+    whose.
+    """
+
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
