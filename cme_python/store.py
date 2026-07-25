@@ -1,15 +1,20 @@
 """Belief registry — persistent storage for beliefs.
 
-SQLite via the stdlib. The full belief round-trips through Pydantic JSON in a
-`data` column; the columns beside it exist only so we can filter and sort
+SQLite by default; PostgreSQL when the spec's deployment story calls for it
+(see `postgres_store.py`). The full belief round-trips through Pydantic JSON in
+a `data` column, and the columns beside it exist only so we can filter and sort
 without deserialising every row.
+
+The two dialects share every statement below. Where they genuinely differ —
+parameter style, `LIKE` case-sensitivity, schema introspection — the difference
+is a class attribute or a hook, not a forked implementation.
 """
 
 from __future__ import annotations
 
 import sqlite3
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -29,10 +34,10 @@ CREATE TABLE IF NOT EXISTS beliefs (
 );
 """
 
-INDEXES = """
-CREATE INDEX IF NOT EXISTS idx_beliefs_confidence ON beliefs(confidence);
-CREATE INDEX IF NOT EXISTS idx_beliefs_tier ON beliefs(tier, scope);
-"""
+INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_beliefs_confidence ON beliefs(confidence)",
+    "CREATE INDEX IF NOT EXISTS idx_beliefs_tier ON beliefs(tier, scope)",
+]
 """Created after migration — indexing a column an older table lacks would fail."""
 
 ADDED_COLUMNS = {
@@ -41,12 +46,40 @@ ADDED_COLUMNS = {
 }
 """Columns introduced after the first release, applied to older databases."""
 
+UPSERT = """INSERT INTO beliefs
+       (id, statement, confidence, source, tier, scope, created_at, updated_at, data)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+   ON CONFLICT(id) DO UPDATE SET
+       statement=excluded.statement,
+       confidence=excluded.confidence,
+       source=excluded.source,
+       tier=excluded.tier,
+       scope=excluded.scope,
+       updated_at=excluded.updated_at,
+       data=excluded.data"""
+
 
 class BeliefStore:
     """Persistent registry of beliefs. Use as a context manager or call close()."""
 
+    placeholder = "?"
+    like = "LIKE"
+    """SQLite's LIKE ignores case; Postgres's does not, so it overrides this.
+
+    Not cosmetic: `search()` backs duplicate detection in the Belief Engine, so
+    a case-sensitive LIKE would quietly stop recognising "Rust is fast" and
+    "rust is fast" as the same claim on one backend but not the other.
+    """
+
     def __init__(self, path: str | Path = ":memory:") -> None:
         self.path = str(path)
+        self._lock = threading.RLock()
+        self._db = self._connect()
+        self._init_schema()
+
+    # --- dialect hooks -----------------------------------------------------
+
+    def _connect(self):
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         # FastAPI runs sync endpoints on a threadpool, so the connection is
@@ -55,14 +88,31 @@ class BeliefStore:
         # correct answer.
         #
         # ponytail: a single global lock serialises every query. Right while
-        # requests are cheap; move to a per-thread connection or a pool if
-        # concurrent reads start queueing.
-        self._lock = threading.RLock()
-        self._db = sqlite3.connect(self.path, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
-        self._db.executescript(SCHEMA)
+        # requests are cheap; move to a pool if concurrent reads start queueing.
+        db = sqlite3.connect(self.path, check_same_thread=False)
+        db.row_factory = sqlite3.Row
+        return db
+
+    def _existing_columns(self) -> set[str]:
+        return {row["name"] for row in self._db.execute("PRAGMA table_info(beliefs)")}
+
+    def _sql(self, statement: str) -> str:
+        """Translate the shared SQL into this dialect."""
+        if self.placeholder != "?":
+            statement = statement.replace("?", self.placeholder)
+        if self.like != "LIKE":
+            statement = statement.replace(" LIKE ", f" {self.like} ")
+        return statement
+
+    # --- plumbing ----------------------------------------------------------
+
+    def _init_schema(self) -> None:
+        with self._write() as db:
+            db.execute(SCHEMA)
         self._migrate()
-        self._db.executescript(INDEXES)
+        with self._write() as db:
+            for index in INDEXES:
+                db.execute(index)
 
     def _migrate(self) -> None:
         """Bring an older database up to the current schema.
@@ -71,20 +121,19 @@ class BeliefStore:
         memory. Adding the columns and backfilling from the stored JSON keeps it
         readable instead of crashing on the first query.
         """
-        existing = {row["name"] for row in self._db.execute("PRAGMA table_info(beliefs)")}
-        missing = [name for name in ADDED_COLUMNS if name not in existing]
+        missing = [name for name in ADDED_COLUMNS if name not in self._existing_columns()]
         if not missing:
             return
-        with self._db:
+        with self._write() as db:
             for name in missing:
-                self._db.execute(f"ALTER TABLE beliefs ADD COLUMN {name} {ADDED_COLUMNS[name]}")
-            # The JSON blob is the source of truth; the columns only mirror it.
-            for row in self._db.execute("SELECT id, data FROM beliefs").fetchall():
-                belief = Belief.model_validate_json(row["data"])
-                self._db.execute(
-                    "UPDATE beliefs SET tier = ?, scope = ? WHERE id = ?",
-                    (str(belief.tier), belief.scope, row["id"]),
-                )
+                db.execute(f"ALTER TABLE beliefs ADD COLUMN {name} {ADDED_COLUMNS[name]}")
+        # The JSON blob is the source of truth; the columns only mirror it.
+        for row in self._read("SELECT id, data FROM beliefs"):
+            belief = Belief.model_validate_json(row["data"])
+            self._exec(
+                "UPDATE beliefs SET tier = ?, scope = ? WHERE id = ?",
+                (str(belief.tier), belief.scope, row["id"]),
+            )
 
     def __enter__(self) -> BeliefStore:
         return self
@@ -97,45 +146,40 @@ class BeliefStore:
             self._db.close()
 
     @contextmanager
-    def _write(self) -> Iterator[sqlite3.Connection]:
+    def _write(self) -> Iterator:
         with self._lock, self._db:
-            yield self._db
+            yield self._db.cursor() if self.placeholder != "?" else self._db
 
-    def _read(self, sql: str, params: Sequence[object] = ()) -> list[sqlite3.Row]:
+    def _exec(self, sql: str, params: Sequence[object] = ()) -> int:
+        """Run a statement, returning rows affected."""
+        with self._write() as db:
+            return db.execute(self._sql(sql), params).rowcount
+
+    def _read(self, sql: str, params: Sequence[object] = ()) -> list[Mapping]:
         """Rows are materialised inside the lock; a lazy cursor would escape it."""
         with self._lock:
-            return self._db.execute(sql, params).fetchall()
+            cursor = self._db.cursor()
+            cursor.execute(self._sql(sql), params)
+            return cursor.fetchall()
 
     # --- registry operations ----------------------------------------------
 
     def save(self, belief: Belief) -> Belief:
         """Insert or update. Saving is idempotent on belief id."""
-        with self._write() as db:
-            db.execute(
-                """INSERT INTO beliefs
-                       (id, statement, confidence, source, tier, scope,
-                        created_at, updated_at, data)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(id) DO UPDATE SET
-                       statement=excluded.statement,
-                       confidence=excluded.confidence,
-                       source=excluded.source,
-                       tier=excluded.tier,
-                       scope=excluded.scope,
-                       updated_at=excluded.updated_at,
-                       data=excluded.data""",
-                (
-                    belief.id,
-                    belief.statement,
-                    belief.confidence,
-                    str(belief.source),
-                    str(belief.tier),
-                    belief.scope,
-                    belief.created_at.isoformat(),
-                    belief.updated_at.isoformat(),
-                    belief.model_dump_json(),
-                ),
-            )
+        self._exec(
+            UPSERT,
+            (
+                belief.id,
+                belief.statement,
+                belief.confidence,
+                str(belief.source),
+                str(belief.tier),
+                belief.scope,
+                belief.created_at.isoformat(),
+                belief.updated_at.isoformat(),
+                belief.model_dump_json(),
+            ),
+        )
         return belief
 
     def save_all(self, beliefs: list[Belief]) -> int:
@@ -148,8 +192,7 @@ class BeliefStore:
         return Belief.model_validate_json(rows[0]["data"]) if rows else None
 
     def delete(self, belief_id: str) -> bool:
-        with self._write() as db:
-            return db.execute("DELETE FROM beliefs WHERE id = ?", (belief_id,)).rowcount > 0
+        return self._exec("DELETE FROM beliefs WHERE id = ?", (belief_id,)) > 0
 
     def all(
         self,
@@ -183,7 +226,7 @@ class BeliefStore:
         return {row["tier"]: row["n"] for row in rows}
 
     def search(self, text: str, *, limit: int = 20) -> list[Belief]:
-        """Substring match on the statement.
+        """Substring match on the statement, case-insensitively.
 
         ponytail: LIKE scan, not semantic search — the Evidence Engine's vector
         store is where real retrieval lands. Swap in FTS5 if this gets slow.
@@ -196,8 +239,21 @@ class BeliefStore:
 
     def prune_dead(self, threshold: float) -> int:
         """Drop disproven beliefs out of the registry. Returns rows removed."""
-        with self._write() as db:
-            return db.execute("DELETE FROM beliefs WHERE confidence <= ?", (threshold,)).rowcount
+        return self._exec("DELETE FROM beliefs WHERE confidence <= ?", (threshold,))
 
     def __len__(self) -> int:
         return self._read("SELECT COUNT(*) AS n FROM beliefs")[0]["n"]
+
+
+def open_store(target: str | Path = ":memory:") -> BeliefStore:
+    """Open the registry named by a path or a PostgreSQL URL.
+
+    `CME_DATABASE` flows through here, so switching backends is configuration
+    rather than a code change.
+    """
+    text = str(target)
+    if text.startswith(("postgres://", "postgresql://")):
+        from cme_python.postgres_store import PostgresBeliefStore  # noqa: PLC0415
+
+        return PostgresBeliefStore(text)
+    return BeliefStore(text)

@@ -35,6 +35,45 @@ jobs:
       - name: Test
         run: pytest -q
 
+  postgres:
+    # The store contract, run against a real PostgreSQL. The same tests cover
+    # SQLite, so the two backends cannot drift apart unnoticed.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: cme
+          POSTGRES_DB: cme
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt "psycopg[binary]"
+
+      - name: Test against PostgreSQL
+        env:
+          DATABASE_URL: postgresql://postgres:cme@localhost:5432/cme
+        run: |
+          pytest tests/python_tests/test_store.py -q
+          # These skip without DATABASE_URL, so prove they actually ran.
+          pytest tests/python_tests/test_store.py -q --collect-only | grep -q "postgres"
+
   qdrant:
     # Against a real Qdrant, not a mock — a mock would only prove it agrees
     # with itself. This also checks the remote index ranks identically to the

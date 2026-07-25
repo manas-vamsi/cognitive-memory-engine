@@ -1,5 +1,6 @@
 """Self-check for the belief registry. Run: python tests/python_tests/test_store.py"""
 
+import os
 import sys
 from pathlib import Path
 
@@ -10,11 +11,40 @@ import pytest
 from cme_python.models import DEAD_BELOW, Belief, Evidence, SourceKind
 from cme_python.store import BeliefStore
 
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
-@pytest.fixture
-def store():
-    with BeliefStore() as s:
+BACKENDS = [
+    pytest.param("sqlite", id="sqlite"),
+    pytest.param(
+        "postgres",
+        id="postgres",
+        marks=pytest.mark.skipif(not DATABASE_URL, reason="DATABASE_URL not set"),
+    ),
+]
+
+
+@pytest.fixture(params=BACKENDS)
+def store(request):
+    """Every test below runs against both backends.
+
+    The registry contract is the same either way; testing Postgres with its own
+    parallel suite would let the two drift, which is exactly the bug worth
+    preventing.
+    """
+    if request.param == "sqlite":
+        with BeliefStore() as s:
+            yield s
+        return
+
+    from cme_python.store import open_store
+
+    s = open_store(DATABASE_URL)
+    s._exec("DELETE FROM beliefs")  # a shared server needs a clean table
+    try:
         yield s
+    finally:
+        s._exec("DELETE FROM beliefs")
+        s.close()
 
 
 def test_round_trip_preserves_evidence_and_connections(store):
@@ -64,6 +94,20 @@ def test_search_matches_statement_substring(store):
     store.save_all([Belief(statement="Rust is fast."), Belief(statement="Python is slow.")])
     assert [b.statement for b in store.search("Rust")] == ["Rust is fast."]
     assert store.search("Haskell") == []
+
+
+def test_search_ignores_case_on_every_backend(store):
+    """A dialect difference with teeth.
+
+    SQLite's LIKE is case-insensitive and Postgres's is not. Duplicate
+    detection in the Belief Engine probes through `search`, so a case-sensitive
+    backend would quietly stop recognising "Rust is fast" and "rust is fast" as
+    the same claim — the same input building a different registry depending on
+    where it is stored.
+    """
+    store.save(Belief(statement="Rust Is Fast."))
+    assert [b.statement for b in store.search("rust is fast")] == ["Rust Is Fast."]
+    assert [b.statement for b in store.search("RUST")] == ["Rust Is Fast."]
 
 
 def test_prune_removes_only_disproven_beliefs(store):
