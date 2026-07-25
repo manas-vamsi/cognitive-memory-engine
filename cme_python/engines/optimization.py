@@ -239,7 +239,7 @@ class OptimizationEngine:
         budget: float = 60,
         pool: int = 12,
         redundancy: float = 1.0,
-        within: Callable[[Belief], bool] | None = None,
+        within: object | None = None,
     ) -> list[Belief]:
         """The best *set* of beliefs for a query within a token budget.
 

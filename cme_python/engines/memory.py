@@ -31,9 +31,18 @@ class MemoryView(BaseModel):
     scope: str | None = None
 
     def matches(self, belief: Belief) -> bool:
-        if self.tier is not None and belief.tier != self.tier:
+        return self.allows(belief.tier, belief.scope)
+
+    def allows(self, tier: MemoryTier | str, scope: str | None) -> bool:
+        """The same decision from tier and scope alone.
+
+        Retrieval checks membership before it loads anything, so the filter has
+        to work without a `Belief` in hand — otherwise scoping would force a
+        fetch of every candidate just to reject most of them.
+        """
+        if self.tier is not None and str(tier) != str(self.tier):
             return False
-        return not (self.scope is not None and belief.scope != self.scope)
+        return not (self.scope is not None and scope != self.scope)
 
 
 class MemoryEngine:

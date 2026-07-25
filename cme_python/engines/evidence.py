@@ -15,12 +15,16 @@ import math
 import re
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, NamedTuple
 
 from pydantic import BaseModel
 
 from cme_python.engines.belief import split_sentences
 from cme_python.models import Belief, Evidence
 from cme_python.store import BeliefStore
+
+if TYPE_CHECKING:  # avoids a cycle: memory imports nothing from here
+    from cme_python.engines.memory import MemoryView
 
 _WORD = re.compile(r"[a-z0-9]+")
 _STOPWORDS = frozenset(
@@ -71,6 +75,16 @@ _STOPWORDS = frozenset(
         "such",
     ]
 )
+
+
+class Meta(NamedTuple):
+    """What ranking needs about a belief, without its text."""
+
+    norm: float
+    confidence: float
+    tier: str
+    scope: str | None
+
 
 SUPPORTED_AT = 0.15
 """Relevance below this and we call the claim ungrounded."""
@@ -163,6 +177,9 @@ class EvidenceEngine:
         self._postings: dict[str, set[str]] = defaultdict(set)
         """term -> belief ids containing it, so a query touches only matches."""
 
+        self._meta: dict[str, Meta] = {}
+        """Per-belief scoring facts, so candidates need not be loaded to rank."""
+
     # --- lexical index -----------------------------------------------------
 
     def reindex(self) -> None:
@@ -170,6 +187,7 @@ class EvidenceEngine:
         self._docs = {}
         self._df = Counter()
         self._postings = defaultdict(set)
+        self._meta = {}
         self._seen = {}
         self._update(self.store.all())
 
@@ -192,11 +210,22 @@ class EvidenceEngine:
             self._df.update(terms.keys())
             for term in terms:
                 self._postings[term].add(belief.id)
+            # Everything scoring needs about a belief except its text. Document
+            # length never changes between edits, so recomputing it per query
+            # per candidate was pure waste; confidence, tier and scope live here
+            # so a candidate can be scored and filtered without being loaded.
+            self._meta[belief.id] = Meta(
+                norm=math.sqrt(sum(terms.values()) or 1),
+                confidence=belief.confidence,
+                tier=str(belief.tier),
+                scope=belief.scope,
+            )
         self._recompute_idf()
 
     def _forget(self, belief_ids: set[str]) -> None:
         for belief_id in belief_ids:
             terms = self._docs.pop(belief_id, None)
+            self._meta.pop(belief_id, None)
             if terms is not None:
                 self._df.subtract(terms.keys())
                 self._unpost(belief_id, terms.keys())
@@ -252,7 +281,7 @@ class EvidenceEngine:
         query: str,
         limit: int = 5,
         *,
-        within: Callable[[Belief], bool] | None = None,
+        within: MemoryView | None = None,
     ) -> list[tuple[Belief, float]]:
         """Beliefs bearing on a query, best first, as (belief, relevance).
 
@@ -265,7 +294,7 @@ class EvidenceEngine:
         """
         if self._retriever is not None:
             hits = self._retriever(query, limit)
-            return [(b, r) for b, r in hits if within is None or within(b)]
+            return [(b, r) for b, r in hits if within is None or within.matches(b)]
         self._fresh_index()
         terms = tokenise(query)
         if not terms:
@@ -277,22 +306,35 @@ class EvidenceEngine:
         candidates: set[str] = set()
         for term in set(terms):
             candidates |= self._postings.get(term, frozenset())
-        scored: list[tuple[Belief, float]] = []
+
+        idf = self._idf
+        ranked: list[tuple[float, str]] = []
         for belief_id in candidates:
+            meta = self._meta.get(belief_id)
+            if meta is None:
+                continue
+            # Filtering here, on cached tier and scope, keeps the guarantee that
+            # scoping applies before the limit — without loading anything.
+            if within is not None and not within.allows(meta.tier, meta.scope):
+                continue
             doc = self._docs[belief_id]
-            length = sum(doc.values()) or 1
-            overlap = sum(doc[t] * self._idf.get(t, 0.0) for t in terms)
+            overlap = sum(doc[t] * idf.get(t, 0.0) for t in terms)
             if overlap <= 0:
                 continue
+            ranked.append((round((overlap / meta.norm) * meta.confidence, 6), belief_id))
+
+        # Load only what is being returned. Scoring 600 candidates to answer
+        # with 5 used to mean 600 round trips to the registry.
+        ranked.sort(key=lambda pair: (-pair[0], pair[1]))
+        hits: list[tuple[Belief, float]] = []
+        for relevance, belief_id in ranked:
             belief = self.store.get(belief_id)
             if belief is None:  # deleted between index and read
                 continue
-            if within is not None and not within(belief):
-                continue
-            relevance = (overlap / math.sqrt(length)) * belief.confidence
-            scored.append((belief, round(relevance, 6)))
-        scored.sort(key=lambda pair: pair[1], reverse=True)
-        return scored[:limit]
+            hits.append((belief, relevance))
+            if len(hits) == limit:
+                break
+        return hits
 
     # --- justification -----------------------------------------------------
 
@@ -313,7 +355,7 @@ class EvidenceEngine:
         *,
         threshold: float = SUPPORTED_AT,
         coverage_at: float = COVERAGE_AT,
-        within: Callable[[Belief], bool] | None = None,
+        within: MemoryView | None = None,
     ) -> ClaimCheck:
         """Is this one sentence backed by something the engine knows?
 
@@ -350,7 +392,7 @@ class EvidenceEngine:
         text: str,
         *,
         threshold: float = SUPPORTED_AT,
-        within: Callable[[Belief], bool] | None = None,
+        within: MemoryView | None = None,
     ) -> GroundingReport:
         """Check generated text claim by claim against the registry.
 

@@ -118,7 +118,7 @@ class CME:
         chosen = self.optimizer.select(
             query,
             budget=budget or settings.context_budget,
-            within=self.memory.view(tier, scope).matches if tier or scope else None,
+            within=self.memory.view(tier, scope) if tier or scope else None,
         )
         return GroundedContext(
             query=query,
@@ -140,7 +140,7 @@ class CME:
         claim backed only by another tier is not backed for this caller.
         """
         return self.evidence.ground(
-            answer, within=self.memory.view(tier, scope).matches if tier or scope else None
+            answer, within=self.memory.view(tier, scope) if tier or scope else None
         )
 
     def stats(self) -> MemoryStats:
