@@ -35,6 +35,48 @@ jobs:
       - name: Test
         run: pytest -q
 
+  qdrant:
+    # Against a real Qdrant, not a mock — a mock would only prove it agrees
+    # with itself. This also checks the remote index ranks identically to the
+    # in-memory one, which is what makes it a drop-in.
+    runs-on: ubuntu-latest
+    services:
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt qdrant-client
+
+      - name: Wait for Qdrant
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -fs localhost:6333/readyz; then exit 0; fi
+            sleep 2
+          done
+          echo "qdrant never became ready"
+          exit 1
+
+      - name: Test against Qdrant
+        env:
+          QDRANT_URL: http://localhost:6333
+        run: |
+          pytest tests/python_tests/test_qdrant.py -q
+          # Guard against the suite silently skipping: if the server is up,
+          # these tests must actually run.
+          pytest tests/python_tests/test_qdrant.py -q --collect-only | grep -q "test_add_and_search"
+
   rust:
     runs-on: ubuntu-latest
     defaults:

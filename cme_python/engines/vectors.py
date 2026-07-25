@@ -169,6 +169,9 @@ class VectorIndex:
     def remove(self, belief_id: str) -> None:
         self._vectors.pop(belief_id, None)
 
+    def clear(self) -> None:
+        self._vectors.clear()
+
     def search(self, query: str, limit: int = 5) -> list[tuple[str, float]]:
         """Belief ids nearest the query, best first."""
         target = self.embedder.embed(query)
@@ -218,7 +221,10 @@ def vector_retriever(
 
     def refresh() -> None:
         if state["size"] != len(store):
-            index._vectors.clear()
+            # clear()/add_all()/search() is the whole index contract. Reaching
+            # into `_vectors` here worked only for the in-memory index and broke
+            # the moment a second backend appeared.
+            index.clear()
             index.add_all(store.all())
             state["size"] = len(store)
 
