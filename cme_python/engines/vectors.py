@@ -213,20 +213,28 @@ def vector_retriever(
 
     Similarity is scaled by belief confidence for the same reason the lexical
     path does it: a perfectly matching statement nobody believes should not win.
-    The index rebuilds when the registry size changes, matching the lexical
-    engine's behaviour rather than inventing a different staleness rule.
+
+    The index updates incrementally. Rebuilding on every change made a single
+    new note cost a full re-embed of the registry — 5.7 seconds at 25k beliefs,
+    paid by the next question. For a memory engine, ingesting constantly is the
+    normal case, not the edge case.
     """
     index = index or VectorIndex()
-    state = {"size": -1}
+    seen: dict[str, str] = {}
 
     def refresh() -> None:
-        if state["size"] != len(store):
-            # clear()/add_all()/search() is the whole index contract. Reaching
-            # into `_vectors` here worked only for the in-memory index and broke
-            # the moment a second backend appeared.
-            index.clear()
-            index.add_all(store.all())
-            state["size"] = len(store)
+        current = store.fingerprints()
+        if current == seen:
+            return
+        for gone in seen.keys() - current.keys():
+            index.remove(gone)
+        # An id whose stamp moved was edited; re-embedding it is an upsert.
+        changed = [bid for bid, stamp in current.items() if seen.get(bid) != stamp]
+        if changed:
+            fresh = [store.get(bid) for bid in changed]
+            index.add_all([b for b in fresh if b is not None])
+        seen.clear()
+        seen.update(current)
 
     def retrieve(query: str, limit: int) -> list[tuple[Belief, float]]:
         refresh()
