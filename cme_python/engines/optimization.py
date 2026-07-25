@@ -161,10 +161,21 @@ def solve_greedy(qubo: QUBO, feasible: Feasible) -> list[int]:
 
 
 def solve(qubo: QUBO, feasible: Feasible) -> list[int]:
-    """Exact when the problem is small enough, greedy when it is not."""
+    """Exact when the problem is small enough, annealing when it is not.
+
+    Annealing rather than greedy, on measurement: `benchmarks/run.py` shows
+    greedy landing above the ground state on real selection instances (+0.24
+    energy at 8 variables) while annealing matches exact search every time.
+    Greedy is faster, but selecting the wrong memories quickly is not a
+    trade worth making — it is the answer the caller sees.
+    """
     if qubo.size <= EXHAUSTIVE_LIMIT:
         return solve_exhaustive(qubo, feasible)
-    return solve_greedy(qubo, feasible)
+    # Imported here, not at module scope: quantum_layer builds on this module,
+    # so a top-level import would be circular.
+    from cme_python.engines.quantum_layer import simulated_annealing  # noqa: PLC0415
+
+    return simulated_annealing(qubo, feasible)
 
 
 # --- engine ----------------------------------------------------------------

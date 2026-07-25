@@ -103,6 +103,37 @@ def test_greedy_matches_exhaustive_on_small_instances():
     )
 
 
+def test_greedy_can_miss_the_ground_state_but_annealing_does_not():
+    """Why `solve` dispatches to annealing above the exhaustive limit.
+
+    Greedy is the faster solver and the wrong default: selecting the wrong
+    memories quickly is still the wrong answer. Measured in benchmarks/run.py.
+    """
+    from cme_python.engines.quantum_layer import simulated_annealing
+
+    n = 8
+    relevances = [0.5 + (i % 7) / 10 for i in range(n)]
+    statements = [f"claim {i % 5} variant {i}" for i in range(n)]
+    sims = {
+        (i, j): jaccard(statements[i], statements[j]) for i in range(n) for j in range(i + 1, n)
+    }
+    qubo = build_selection_qubo(relevances, sims, redundancy=1.2)
+    feasible = budget_constraint([3] * n, budget=12)
+
+    best = qubo.energy(solve_exhaustive(qubo, feasible))
+    assert qubo.energy(solve_greedy(qubo, feasible)) > best + 1e-6  # greedy settles early
+    assert qubo.energy(simulated_annealing(qubo, feasible)) == pytest.approx(best)
+
+
+def test_solve_uses_annealing_beyond_the_exhaustive_limit():
+    from cme_python.engines.optimization import EXHAUSTIVE_LIMIT, solve
+
+    n = EXHAUSTIVE_LIMIT + 2
+    qubo = build_selection_qubo([0.9] * n, {}, redundancy=1.0)
+    chosen = solve(qubo, budget_constraint([1] * n, budget=n))
+    assert sum(chosen) == n  # nothing penalised, so everything is worth taking
+
+
 def test_empty_problem_is_handled():
     assert solve_exhaustive(QUBO(0), ALWAYS) == []
     assert solve_greedy(QUBO(0), ALWAYS) == []

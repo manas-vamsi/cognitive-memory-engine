@@ -176,6 +176,42 @@ cognitive-memory-engine/
 
 ---
 
+## Measured, not asserted
+
+`python benchmarks/run.py` runs the claims this project makes about itself.
+Timings are one recorded run on one machine at scale 400 and move by ±30%
+between runs — the shapes are the point, not the milliseconds. The solver
+*quality* gaps below are deterministic and reproduce exactly.
+
+**Optimised selection vs a naive top-k slice**, same 24-token budget:
+
+| strategy | picked | tokens | distinct topics |
+|---|---|---|---|
+| top-k | 3 | 18 | **1** |
+| optimised | 3 | 19 | **3** |
+
+Both spend the budget; top-k spends it on one fact restated three times. This
+is research question 4 in one table — the win is not a better *ranking*, it is
+refusing to pay twice for the same thing.
+
+**Solvers**, on real selection instances:
+
+| vars | exact | greedy | annealing | found the optimum? |
+|---|---|---|---|---|
+| 8 | 0.55ms | 0.11ms | 11.2ms | greedy **+0.236**, annealing exact |
+| 12 | 6.9ms | 0.30ms | 17.3ms | both exact |
+| 16 | 71.8ms | 0.65ms | 19.8ms | greedy **+0.136**, annealing exact |
+
+Exact search doubles in cost per variable; by 16 it is already slower than
+annealing. Greedy is the fastest and the only one that returns the wrong
+answer — which is why `solve()` now dispatches to annealing above the exact
+limit rather than to greedy. Selecting the wrong memories quickly is still the
+wrong answer.
+
+That annealing tracks exact search on the same QUBO is what makes research
+question 6 answerable: swap in a hardware backend and the comparison is
+already set up.
+
 ## Research questions
 
 1. Can a system reason over structured **beliefs** instead of raw tokens?
@@ -248,6 +284,11 @@ pip install dist/*.whl        # picked up automatically; CME_GRAPH=python opts o
 The Python `KnowledgeGraph` stays the reference implementation, and
 `tests/python_tests/test_graph_parity.py` runs the same assertions against both
 so "faster" cannot quietly become "different".
+
+Measured at 400 beliefs (`python benchmarks/run.py`): **2.3× on traversal, 1.3×
+on build**. Real, but nothing like the order-of-magnitude the phrase "native
+core" tends to imply — worth having for the hot path, not worth installing a
+toolchain for if you are not hitting it.
 
 Building it exposed a defect in *both*: BFS iterated an unordered set, so two
 equally-short paths were equally likely and the reasoning trace could change
