@@ -47,8 +47,6 @@ class PostgresBeliefStore(BeliefStore):
         except ImportError:
             raise _missing() from None
 
-        # autocommit off; `_write` owns the transaction boundary, matching the
-        # SQLite path where `with connection` commits.
         return psycopg.connect(self.path, row_factory=dict_row)
 
     def _existing_columns(self) -> set[str]:
@@ -60,8 +58,18 @@ class PostgresBeliefStore(BeliefStore):
 
     @contextmanager
     def _write(self) -> Iterator:
-        """psycopg commits on exiting the connection context, like sqlite3."""
-        with self._lock, self._db, self._db.cursor() as cursor:
+        """Commit a statement.
+
+        `with connection:` means different things in the two drivers, and the
+        difference is not subtle: sqlite3 commits the transaction and leaves the
+        connection open, while psycopg3 commits *and closes the connection*.
+        Written the sqlite3 way, the first write here closed the connection and
+        every later query failed with "the connection is closed".
+
+        `connection.transaction()` is the psycopg3 primitive that means what
+        sqlite3's `with connection:` means.
+        """
+        with self._lock, self._db.transaction(), self._db.cursor() as cursor:
             yield cursor
 
     def _read(self, sql: str, params: Sequence[object] = ()) -> list[dict]:
