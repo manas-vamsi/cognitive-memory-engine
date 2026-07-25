@@ -1,5 +1,5 @@
 # Cognitive Memory Engine (CME): Technical & Conceptual Brief
-> **Project Purpose:** This document serves as the absolute source of truth for the Cognitive Memory Engine (CME) project. It is structured to provide developer agents (like Claude Code) with the deep context needed to write code and generate a world-class `README.md`, while remaining accessible enough for non-technical team members and friends to understand the core concepts.
+> **Project Purpose:** This document serves as the absolute source of truth for the Cognitive Memory Engine (CME) project. It is structured to provide developer agents with the deep context needed to write code and generate a world-class `README.md`, while remaining accessible enough for non-technical team members and friends to understand the core concepts.
 
 ---
 
