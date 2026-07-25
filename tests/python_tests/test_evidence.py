@@ -117,6 +117,49 @@ def test_the_incremental_index_matches_a_full_rebuild(engine):
         assert a == pytest.approx(b)
 
 
+def test_postings_shortcut_matches_a_full_scan(engine):
+    """Skipping non-matching beliefs must change speed, not answers.
+
+    Scores every belief the slow way and asserts the indexed path agrees —
+    ordering, membership and scores.
+    """
+    for i in range(25):
+        engine.store.save(
+            Belief(
+                statement=f"Belief {i} about qubits, rust, or databases.", confidence=0.5 + i / 100
+            )
+        )
+    engine._fresh_index()
+
+    query = "qubits rust databases"
+    terms = tokenise(query)
+    brute = []
+    for belief_id, doc in engine._docs.items():
+        overlap = sum(doc[t] * engine._idf.get(t, 0.0) for t in terms)
+        if overlap <= 0:
+            continue
+        belief = engine.store.get(belief_id)
+        brute.append(
+            (belief, round((overlap / (sum(doc.values()) or 1) ** 0.5) * belief.confidence, 6))
+        )
+    brute.sort(key=lambda pair: pair[1], reverse=True)
+
+    indexed = engine.retrieve(query, limit=len(brute))
+    assert [b.id for b, _ in indexed] == [b.id for b, _ in brute[: len(indexed)]]
+    for (_, a), (_, b) in zip(indexed, brute, strict=False):
+        assert a == pytest.approx(b)
+
+
+def test_postings_drop_terms_when_a_belief_is_edited_away(engine):
+    """A term nobody mentions any more must stop matching."""
+    belief = engine.retrieve(RUST)[0][0]
+    belief.statement = "Rust now discusses photosynthesis instead."
+    engine.store.save(belief)
+
+    assert engine.retrieve("garbage collector") == []
+    assert "collector" not in engine._postings
+
+
 def test_justify_separates_support_from_contradiction(engine):
     b = engine.retrieve(RUST)[0][0]
     assert engine.justify(b).verdict == "grounded"

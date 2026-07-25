@@ -191,8 +191,11 @@ cognitive-memory-engine/
 | 1,000 | ~1 ms | ~45 ms |
 | 10,000 | ~14 ms | ~562 ms |
 
-Retrieval is a **linear scan** — 10× the beliefs, 10× the time. Comfortable to a
-few thousand; use `QdrantIndex` beyond that, which is what its ANN index is for.
+Lexical retrieval consults an inverted index, so a query costs roughly what it
+*matches* rather than what has ever been learnt — a selective query over 2,000
+beliefs is ~5 ms, against ~20 ms for a full scan. Vector retrieval is still a
+linear scan over every embedding; use `QdrantIndex` beyond a few thousand
+beliefs, which is what its ANN index is for.
 
 **Concurrency does not help.** At 1,000 beliefs: 39 req/s with one worker,
 ~29 req/s with sixteen, and p99 climbing from 33 ms to 732 ms. The store holds a
