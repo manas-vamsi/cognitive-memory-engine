@@ -15,6 +15,7 @@ from cme_python.engines.vectors import (
     VectorIndex,
     cosine,
     hash_feature,
+    to_dense,
     vector_retriever,
 )
 from cme_python.models import Belief, Evidence
@@ -58,7 +59,24 @@ def test_morphology_is_not_a_cliff_edge():
 
 
 def test_empty_text_embeds_without_dividing_by_zero():
-    assert HashingEmbedder().embed("") == [0.0] * DIMENSIONS
+    assert HashingEmbedder().embed("") == {}
+    assert to_dense(HashingEmbedder().embed("")) == [0.0] * DIMENSIONS
+
+
+def test_embeddings_are_sparse():
+    """The premise of the whole index: a belief touches few dimensions."""
+    vector = HashingEmbedder().embed("Qubits can hold a superposition of states.")
+    assert 0 < len(vector) < DIMENSIONS // 4
+    assert all(weight != 0.0 for weight in vector.values())
+
+
+def test_dense_and_sparse_cosine_agree():
+    """`to_dense` is the Qdrant boundary, so it must preserve the geometry."""
+    embed = HashingEmbedder().embed
+    a, b = embed("Rust guarantees memory safety"), embed("memory safety in Rust")
+    dense_a, dense_b = to_dense(a), to_dense(b)
+    dot = sum(x * y for x, y in zip(dense_a, dense_b, strict=True))
+    assert cosine(a, b) == pytest.approx(dot)
 
 
 RELATED = [

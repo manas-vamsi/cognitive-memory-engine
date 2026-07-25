@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from cme_python.engines.vectors import DIMENSIONS, Embedder, HashingEmbedder
+from cme_python.engines.vectors import DIMENSIONS, Embedder, HashingEmbedder, to_dense
 from cme_python.models import Belief
 
 COLLECTION = "cme_beliefs"
@@ -49,6 +49,9 @@ class QdrantIndex:
             raise _missing() from None
 
         self.embedder = embedder or HashingEmbedder()
+        # Embeddings are sparse internally; Qdrant wants a dense vector, so the
+        # expansion happens here at the boundary and nowhere else.
+        self._dimensions = getattr(self.embedder, "dimensions", DIMENSIONS)
         self.collection = collection
         self._client = QdrantClient(url=url, api_key=api_key)
         self._models = __import__("qdrant_client.models", fromlist=["models"])
@@ -59,7 +62,7 @@ class QdrantIndex:
                 # Cosine, matching the in-memory index — a different metric here
                 # would silently change what "similar" means between backends.
                 vectors_config=VectorParams(
-                    size=getattr(self.embedder, "dimensions", DIMENSIONS),
+                    size=self._dimensions,
                     distance=Distance.COSINE,
                 ),
             )
@@ -81,7 +84,7 @@ class QdrantIndex:
                 # Qdrant ids must be a UUID or an integer; belief ids are hex
                 # uuid4 without dashes, so they are reversible either way.
                 id=_as_uuid(b.id),
-                vector=self.embedder.embed(self._text(b)),
+                vector=to_dense(self.embedder.embed(self._text(b)), self._dimensions),
                 payload={"belief_id": b.id},
             )
             for b in beliefs
@@ -105,11 +108,14 @@ class QdrantIndex:
 
     def search(self, query: str, limit: int = 5) -> list[tuple[str, float]]:
         """Belief ids nearest the query, best first — same contract as VectorIndex."""
-        vector = self.embedder.embed(query)
-        if not any(vector):
+        sparse = self.embedder.embed(query)
+        if not sparse:
             return []
         found = self._client.query_points(
-            collection_name=self.collection, query=vector, limit=limit, with_payload=True
+            collection_name=self.collection,
+            query=to_dense(sparse, self._dimensions),
+            limit=limit,
+            with_payload=True,
         ).points
         hits = [(p.payload["belief_id"], round(p.score, 6)) for p in found]
         # Qdrant can return small negative cosines; the in-memory index drops
