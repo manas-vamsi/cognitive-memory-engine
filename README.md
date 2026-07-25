@@ -197,9 +197,42 @@ cognitive-memory-engine/
 
 ---
 
+## What works today
+
+Phase 1 is complete and runs offline with no API key — `pip install -r requirements.txt`.
+
+```python
+from cme_python import BeliefStore, SourceKind
+from cme_python.engines import BeliefEngine, EvidenceEngine, KnowledgeGraph
+
+store = BeliefStore("cme.sqlite")
+BeliefEngine(store).ingest(
+    "Qubits can hold a superposition of states. Entanglement links two qubits.",
+    source=SourceKind.RESEARCH_PAPER,
+    locator="doi:10/x",
+    connections=["Quantum Computing"],
+)
+
+evidence = EvidenceEngine(store)
+belief, relevance = evidence.retrieve("superposition")[0]
+print(evidence.justify(belief).explain())
+# "Qubits can hold a superposition of states." is grounded at 70% confidence,
+# from 1 supporting and 0 contradicting source(s): doi:10/x.
+
+report = evidence.ground("Qubits hold superposition. The moon is made of cheese.")
+print(report.score, [c.claim for c in report.unsupported])
+# 0.5 ['The moon is made of cheese.']
+
+graph = KnowledgeGraph.from_store(store)
+print(graph.related(belief.id))   # beliefs sharing a concept
+```
+
+Run the checks: `python -m pytest tests/python_tests -q`
+
 ## Status
 
-Pre-alpha — Phase 1. Specifications live in [`docs/`](docs/):
+Pre-alpha. Phase 1 done (Belief, Memory, Graph, Evidence); Phase 2 next.
+Specifications live in [`docs/`](docs/):
 
 - [`docs/developer-brief.md`](docs/developer-brief.md) — conceptual and technical source of truth.
 - [`docs/project-structure.md`](docs/project-structure.md) — stack, directory layout, phase plan.
