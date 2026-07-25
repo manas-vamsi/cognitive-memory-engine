@@ -54,7 +54,12 @@ def test_jaccard_bounds():
 
 def test_jaccard_sees_through_plurals():
     """Paraphrase is the redundancy worth catching, so stems must match."""
-    assert jaccard("Qubits can hold a superposition of states.", "A qubit holds a superposition of states.") == 1.0
+    assert (
+        jaccard(
+            "Qubits can hold a superposition of states.", "A qubit holds a superposition of states."
+        )
+        == 1.0
+    )
 
 
 def test_budget_constraint_rejects_overspend():

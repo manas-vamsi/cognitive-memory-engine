@@ -1,0 +1,39 @@
+[project]
+name = "cognitive-memory-engine"
+version = "0.1.0"
+description = "Persistent, explainable cognition layer for any LLM: beliefs, evidence, knowledge graph, and math optimization."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = ["pydantic>=2.7", "fastapi>=0.110", "uvicorn>=0.29"]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0", "httpx>=0.27"]
+quantum = ["dwave-ocean-sdk>=6.0", "qiskit>=1.0"]
+llm = ["openai>=1.0", "anthropic>=0.30"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["cme_python", "cme_python.engines", "cme_python.clients"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python_tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+    "E731", # test fixtures assign small lambdas; naming them adds nothing
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests prepend the repo root to sys.path so they run standalone, which forces
+# imports below the top of the file.
+"tests/**" = ["E402"]

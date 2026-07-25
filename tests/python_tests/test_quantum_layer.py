@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import pytest
 
+from cme_python.engines.evidence import EvidenceEngine
 from cme_python.engines.optimization import (
     QUBO,
     OptimizationEngine,
@@ -18,7 +19,6 @@ from cme_python.engines.optimization import (
     build_selection_qubo,
     solve_exhaustive,
 )
-from cme_python.engines.evidence import EvidenceEngine
 from cme_python.engines.quantum_layer import (
     BACKENDS,
     bits_to_spins,

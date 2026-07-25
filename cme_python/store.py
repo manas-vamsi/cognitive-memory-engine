@@ -75,11 +75,15 @@ class BeliefStore:
         """Insert or update. Saving is idempotent on belief id."""
         with self._write() as db:
             db.execute(
-                """INSERT INTO beliefs (id, statement, confidence, source, created_at, updated_at, data)
+                """INSERT INTO beliefs
+                       (id, statement, confidence, source, created_at, updated_at, data)
                    VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET
-                       statement=excluded.statement, confidence=excluded.confidence,
-                       source=excluded.source, updated_at=excluded.updated_at, data=excluded.data""",
+                       statement=excluded.statement,
+                       confidence=excluded.confidence,
+                       source=excluded.source,
+                       updated_at=excluded.updated_at,
+                       data=excluded.data""",
                 (
                     belief.id,
                     belief.statement,

@@ -24,9 +24,52 @@ from cme_python.store import BeliefStore
 
 _WORD = re.compile(r"[a-z0-9]+")
 _STOPWORDS = frozenset(
-    """a an the is are was were be been being of in on at to for from by with
-    and or but if then than that this these those it its as can could will
-    would do does did not no nor so such""".split()
+    [
+        "a",
+        "an",
+        "the",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "from",
+        "by",
+        "with",
+        "and",
+        "or",
+        "but",
+        "if",
+        "then",
+        "than",
+        "that",
+        "this",
+        "these",
+        "those",
+        "it",
+        "its",
+        "as",
+        "can",
+        "could",
+        "will",
+        "would",
+        "do",
+        "does",
+        "did",
+        "not",
+        "no",
+        "nor",
+        "so",
+        "such",
+    ]
 )
 
 SUPPORTED_AT = 0.15
@@ -229,9 +272,7 @@ class EvidenceEngine:
         This is the hallucination guard: anything in `report.unsupported` is a
         sentence the engine cannot back with a stored belief.
         """
-        return GroundingReport(
-            checks=[self.check(c, threshold=threshold) for c in claims_in(text)]
-        )
+        return GroundingReport(checks=[self.check(c, threshold=threshold) for c in claims_in(text)])
 
 
 def claims_in(text: str) -> list[str]:

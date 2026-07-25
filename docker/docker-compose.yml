@@ -1,0 +1,29 @@
+# ponytail: CME only. The spec lists Memgraph, Qdrant and PostgreSQL here, but
+# nothing in the code connects to them yet — the graph is in-memory, retrieval
+# is lexical, and the registry is SQLite. Declaring three servers no code opens
+# a socket to would be config that rots and a stack that fails for reasons
+# unrelated to CME. Each service lands in this file alongside the connector
+# that uses it.
+
+services:
+  cme:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      CME_DATABASE: /data/cme.sqlite
+      CME_SOLVER: annealing
+    volumes:
+      - cme-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  cme-data:

@@ -136,7 +136,7 @@ def test_propagating_an_unknown_belief_is_a_no_op(setup):
 
 def test_the_graph_refreshes_after_the_registry_changes(setup):
     engine, qubits, *_ = setup
-    engine.graph  # prime the cache
+    assert engine.graph is not None  # prime the cache
     fresh = Belief(statement="Entanglement correlates two qubits.", confidence=0.85)
     fresh.connect("Qubits")
     engine.store.save(fresh)

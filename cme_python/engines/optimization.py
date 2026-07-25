@@ -57,7 +57,7 @@ Solver = Callable[[QUBO, Feasible], list[int]]
 
 def budget_constraint(costs: Sequence[float], budget: float) -> Feasible:
     def feasible(x: Sequence[int]) -> bool:
-        return sum(c for c, on in zip(costs, x) if on) <= budget
+        return sum(c for c, on in zip(costs, x, strict=True) if on) <= budget
 
     return feasible
 
@@ -201,7 +201,7 @@ class OptimizationEngine:
         }
         qubo = build_selection_qubo(relevances, similarities, redundancy=redundancy)
         chosen = self.solver(qubo, budget_constraint(costs, budget))
-        return [b for b, on in zip(beliefs, chosen) if on]
+        return [b for b, on in zip(beliefs, chosen, strict=True) if on]
 
     @staticmethod
     def cost(belief: Belief) -> int:

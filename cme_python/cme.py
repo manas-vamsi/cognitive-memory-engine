@@ -38,7 +38,7 @@ class GroundedContext(BaseModel):
         if not self.beliefs:
             return ""
         lines = ["Known facts, with confidence and source:"]
-        for belief, why in zip(self.beliefs, self.justifications):
+        for belief, why in zip(self.beliefs, self.justifications, strict=True):
             sources = ", ".join(e.locator or str(e.source) for e in why.supporting)
             lines.append(
                 f"- {belief.statement} "
@@ -88,9 +88,7 @@ class CME:
         connections: Iterable[str] = (),
     ) -> list[Belief]:
         """Learn from a document. Re-ingesting reinforces rather than duplicates."""
-        return self.beliefs.ingest(
-            text, source=source, locator=locator, connections=connections
-        )
+        return self.beliefs.ingest(text, source=source, locator=locator, connections=connections)
 
     def context(self, query: str, *, budget: float | None = None) -> GroundedContext:
         """The best set of memories for a query, within a token budget.

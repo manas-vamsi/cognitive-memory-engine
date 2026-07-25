@@ -11,10 +11,7 @@ from cme_python.clients.base import EchoClient, GroundedClient, LLMClient
 from cme_python.cme import CME
 from cme_python.models import SourceKind
 
-DOC = (
-    "Qubits can hold a superposition of states. "
-    "Entanglement correlates two separated qubits."
-)
+DOC = "Qubits can hold a superposition of states. Entanglement correlates two separated qubits."
 TRUE_ANSWER = "Entanglement correlates two separated qubits."
 FALSE_ANSWER = "Qubits are powered by steam."
 
