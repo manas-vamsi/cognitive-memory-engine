@@ -1,5 +1,6 @@
 """Self-check for vector retrieval. Run: python tests/python_tests/test_vectors.py"""
 
+import json
 import sys
 from pathlib import Path
 
@@ -7,12 +8,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import pytest
 
+from cme_python.cme import CME
 from cme_python.engines.evidence import EvidenceEngine
 from cme_python.engines.vectors import (
     DIMENSIONS,
     MIN_SIMILARITY,
     HashingEmbedder,
     VectorIndex,
+    VectorRetriever,
+    cache_path_for,
     cosine,
     hash_feature,
     to_dense,
@@ -206,6 +210,96 @@ def test_grounding_still_rejects_a_false_claim_on_a_known_subject(engine):
     """The coverage gate must survive the backend swap."""
     evidence, _ = engine
     assert not evidence.check("Qubits are powered by steam.").supported
+
+
+# --- cache ------------------------------------------------------------------
+
+
+def test_the_cache_survives_a_restart_without_re_embedding(tmp_path):
+    db = tmp_path / "cme.sqlite"
+    with CME(str(db), retrieval="vector") as cme:
+        cme.ingest(HTTP)
+        cme.context("web request library")
+    cache = cache_path_for(str(db))
+    assert cache.exists()
+
+    with CME(str(db), retrieval="vector") as cme:
+        # Nothing has been embedded yet in this process; the hits can only come
+        # from the cache being loaded.
+        assert cme._vectors.index.embedder is not None
+        assert cme.context("web request library").beliefs
+        assert len(cme._vectors.index) == len(cme.store)
+
+
+def test_a_cache_written_by_a_different_embedder_is_discarded(tmp_path):
+    """The dangerous failure: vectors that load fine and mean nothing.
+
+    Different dimensions produce numbers that still compare, still rank, and
+    are entirely unrelated to the text. Silent nonsense beats a crash for
+    difficulty of diagnosis, so the signature check is not optional.
+    """
+    db = tmp_path / "cme.sqlite"
+    with CME(str(db), retrieval="vector") as cme:
+        cme.ingest(HTTP)
+        cme.context("web request")
+    cache = cache_path_for(str(db))
+
+    payload = json.loads(cache.read_text())
+    payload["signature"]["dimensions"] = 64
+    cache.write_text(json.dumps(payload))
+
+    with BeliefStore(db) as store:
+        retriever = VectorRetriever(store, cache=cache)
+        retriever.load()
+        assert len(retriever.index) == 0  # refused, will rebuild
+        assert retriever.seen == {}
+
+
+def test_a_corrupt_cache_is_ignored_rather_than_fatal(tmp_path):
+    db = tmp_path / "cme.sqlite"
+    cache = tmp_path / "broken.json"
+    cache.write_text("{not json at all")
+    with BeliefStore(db) as store:
+        store.save(Belief(statement=HTTP, confidence=0.9))
+        retriever = VectorRetriever(store, cache=cache)
+        assert retriever("web request library", 5)  # rebuilt, no exception
+
+
+def test_the_cache_picks_up_beliefs_added_since_it_was_written(tmp_path):
+    db = tmp_path / "cme.sqlite"
+    with CME(str(db), retrieval="vector") as cme:
+        cme.ingest(HTTP)
+        cme.context("web request")
+    with BeliefStore(db) as store:
+        store.save(Belief(statement=QUBITS, confidence=0.9))
+    with CME(str(db), retrieval="vector") as cme:
+        assert cme.context("qubit superposition").beliefs
+
+
+def test_a_read_only_session_does_not_rewrite_the_cache(tmp_path):
+    """Rewriting an unchanged cache costs ~750ms at 10k beliefs for no gain."""
+    db = tmp_path / "cme.sqlite"
+    with CME(str(db), retrieval="vector") as cme:
+        cme.ingest(HTTP)
+        cme.context("web request")
+    cache = cache_path_for(str(db))
+    stamp = cache.stat().st_mtime_ns
+
+    with CME(str(db), retrieval="vector") as cme:
+        cme.context("web request")  # reads only
+    assert cache.stat().st_mtime_ns == stamp
+
+    with CME(str(db), retrieval="vector") as cme:
+        cme.ingest(QUBITS)  # writes, so the cache must be refreshed
+        cme.context("qubit")
+    assert cache.stat().st_mtime_ns != stamp
+
+
+def test_in_memory_registries_get_no_cache():
+    """Nothing to key it to, and a shared cache would leak between runs."""
+    assert cache_path_for(":memory:") is None
+    assert cache_path_for("postgresql://localhost/cme") is None
+    assert cache_path_for("cme.sqlite") is not None
 
 
 def test_the_facade_honours_the_retrieval_setting():
