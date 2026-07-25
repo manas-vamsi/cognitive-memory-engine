@@ -61,9 +61,11 @@ def bench_growth() -> None:
             cme = CME(":memory:", retrieval=mode)
             seed(cme, n)
             cme.context("deployment decision", budget=40)
-            warm = best(lambda: cme.context("architecture decision", budget=40), reps=3)
+            # Bound as a default: a bare closure over `cme` would follow the
+            # loop variable and time whichever engine the loop ended on.
+            warm = best(lambda c=cme: c.context("architecture decision", budget=40), reps=3)
             cme.store.save(Belief(statement="One more note about testing today.", confidence=0.8))
-            after = best(lambda: cme.context("testing decision", budget=40), reps=1)
+            after = best(lambda c=cme: c.context("testing decision", budget=40), reps=1)
             print(f"  {n:>8} {mode:<8} {warm:>10.0f}ms {after:>15.0f}ms")
             cme.close()
     print("\n  `after 1 ingest` used to be several seconds: every write rebuilt the")
@@ -83,7 +85,7 @@ def bench_concurrency() -> None:
         latencies: list[float] = []
         lock = threading.Lock()
 
-        def one(i: int) -> None:
+        def one(i: int, latencies: list[float] = latencies, lock: threading.Lock = lock) -> None:
             start = time.perf_counter()
             cme.context(f"{TOPICS[i % len(TOPICS)]} decision", budget=40)
             with lock:
