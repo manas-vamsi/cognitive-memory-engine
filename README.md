@@ -1,5 +1,7 @@
 # Cognitive Memory Engine (CME)
 
+[![CI](https://github.com/manas-vamsi/cognitive-memory-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/manas-vamsi/cognitive-memory-engine/actions/workflows/ci.yml)
+
 > A persistent, explainable cognition layer for LLMs. The model reasons — CME remembers, verifies, and proves.
 
 CME is an open-source infrastructure layer that stops treating the Large Language Model as a database and starts treating it as a **reasoning client**. CME is the **persistent brain**: structured memory, tracked evidence, a knowledge graph, and a math-optimization layer (with an optional quantum backend) that sits behind any model — OpenAI, Claude, Gemini, Llama, DeepSeek, Mistral, Qwen.
@@ -208,8 +210,7 @@ from cme_python.models import SourceKind
 
 with CME("cme.sqlite") as cme:
     cme.ingest(
-        "Qubits can hold a superposition of states. "
-        "Entanglement correlates two separated qubits.",
+        "Qubits can hold a superposition of states. Entanglement correlates two separated qubits.",
         source=SourceKind.RESEARCH_PAPER,
         locator="doi:10/x",
     )
@@ -222,8 +223,9 @@ with CME("cme.sqlite") as cme:
     # - Entanglement correlates two separated qubits. (70% confident; doi:10/x)
 
     # The hallucination guard.
-    report = cme.verify("Entanglement correlates two separated qubits. "
-                        "Qubits are powered by steam.")
+    report = cme.verify(
+        "Entanglement correlates two separated qubits. Qubits are powered by steam."
+    )
     print(report.score, [c.claim for c in report.unsupported])
     # 0.5 ['Qubits are powered by steam.']
 ```

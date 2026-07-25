@@ -8,7 +8,7 @@ links that place it in the knowledge graph.
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _uid() -> str:
@@ -81,7 +81,7 @@ class Belief(BaseModel):
         return self
 
     def connect(self, *labels: str) -> Belief:
-        self.connections.update(l for l in labels if l)
+        self.connections.update(label for label in labels if label)
         self.updated_at = _now()
         return self
 

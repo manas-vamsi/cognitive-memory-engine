@@ -20,10 +20,16 @@ def engine():
     with BeliefStore() as store:
         q = Belief(statement=QUBITS, confidence=0.9)
         q.evidence.append(
-            Evidence(snippet="Bell inequality experiments", source=SourceKind.RESEARCH_PAPER, locator="doi:10/x")
+            Evidence(
+                snippet="Bell inequality experiments",
+                source=SourceKind.RESEARCH_PAPER,
+                locator="doi:10/x",
+            )
         )
         r = Belief(statement=RUST, confidence=0.95)
-        r.evidence.append(Evidence(snippet="The Rust Book, ownership chapter", locator="doc.rust-lang.org"))
+        r.evidence.append(
+            Evidence(snippet="The Rust Book, ownership chapter", locator="doc.rust-lang.org")
+        )
         store.save_all([q, r])
         yield EvidenceEngine(store)
 

@@ -20,9 +20,34 @@ from cme_python.store import BeliefStore
 
 _WORDS = re.compile(r"[a-z']+")
 _NEGATIONS = frozenset(
-    """no not never none cannot can't without nor lacks lack lacking
-    isn't doesn't don't didn't won't wasn't aren't hasn't haven't unable
-    fails fail false absent neither""".split()
+    [
+        "no",
+        "not",
+        "never",
+        "none",
+        "cannot",
+        "can't",
+        "without",
+        "nor",
+        "lacks",
+        "lack",
+        "lacking",
+        "isn't",
+        "doesn't",
+        "don't",
+        "didn't",
+        "won't",
+        "wasn't",
+        "aren't",
+        "hasn't",
+        "haven't",
+        "unable",
+        "fails",
+        "fail",
+        "false",
+        "absent",
+        "neither",
+    ]
 )
 
 CONTRADICTION_AT = 0.75
@@ -78,7 +103,9 @@ class Chain(BaseModel):
     def explain(self) -> str:
         steps = " -> ".join(
             part
-            for belief, concept in zip(self.beliefs, [*self.concepts, None])
+            # strict=False: this is display code, and a malformed chain should
+            # render short rather than raise from inside an error message.
+            for belief, concept in zip(self.beliefs, [*self.concepts, None], strict=False)
             for part in (f'"{belief.statement}"', concept)
             if part
         )
