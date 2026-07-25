@@ -35,6 +35,66 @@ jobs:
       - name: Test
         run: pytest -q
 
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cme-core
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cme-core
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+  parity:
+    # The Rust core is only worth having if it agrees with the Python
+    # reference. Build the wheel, install it, and run the shared assertions
+    # against both implementations.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cme-core
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt maturin
+
+      - name: Build and install cme_core
+        run: |
+          maturin build --release --features extension-module --out dist --manifest-path cme-core/Cargo.toml
+          pip install dist/*.whl
+
+      - name: Parity tests against the native graph
+        run: |
+          python -c "import cme_core; print('cme_core loaded')"
+          pytest -q
+
   docker:
     runs-on: ubuntu-latest
     steps:

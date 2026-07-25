@@ -12,8 +12,10 @@ from itertools import combinations
 
 from pydantic import BaseModel
 
+from cme_python.config import settings
 from cme_python.engines.evidence import tokenise
 from cme_python.engines.graph import BELIEF, CONCEPT, KnowledgeGraph, belief_node
+from cme_python.engines.native import graph_class
 from cme_python.engines.optimization import jaccard, stem
 from cme_python.models import Belief
 from cme_python.store import BeliefStore
@@ -155,9 +157,14 @@ class ReasoningEngine:
 
     @property
     def graph(self) -> KnowledgeGraph:
-        """Rebuilt whenever the registry has changed under us."""
+        """Rebuilt whenever the registry has changed under us.
+
+        Uses the Rust core when it is built, the Python reference otherwise.
+        Both produce identical traversals — see `test_graph_parity.py`.
+        """
         if self._graph is None or self._graph_size != len(self.store):
-            self._graph = KnowledgeGraph.from_store(self.store)
+            backend = graph_class(settings.graph_backend != "python")
+            self._graph = backend.from_store(self.store)
             self._graph_size = len(self.store)
         return self._graph
 

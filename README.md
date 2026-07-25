@@ -234,6 +234,28 @@ A claim is only grounded if a belief is both **relevant** to it and **covers**
 it. Sharing a subject word is not evidence — that is why *"Qubits are powered by
 steam"* fails against a registry full of qubit facts.
 
+### Optional Rust core
+
+Graph traversal is the hot path, so it also exists as a Rust extension
+(`cme-core`, PyO3). It is **optional** — CME runs as pure Python without it.
+
+```bash
+cd cme-core
+maturin build --release --features extension-module --out dist
+pip install dist/*.whl        # picked up automatically; CME_GRAPH=python opts out
+```
+
+The Python `KnowledgeGraph` stays the reference implementation, and
+`tests/python_tests/test_graph_parity.py` runs the same assertions against both
+so "faster" cannot quietly become "different".
+
+Building it exposed a defect in *both*: BFS iterated an unordered set, so two
+equally-short paths were equally likely and the reasoning trace could change
+between identical queries. For an engine that presents that path as its
+explanation, that is a correctness bug. Traversal is now ordered in both
+implementations, which makes explanations reproducible and the two backends
+byte-identical rather than merely equivalent.
+
 ### Memory is tiered, and recall is scoped
 
 Beliefs live in one of `general`, `user`, `scientific`, `organizational`, or
