@@ -199,40 +199,65 @@ cognitive-memory-engine/
 
 ## What works today
 
-Phase 1 is complete and runs offline with no API key — `pip install -r requirements.txt`.
+All seven engines run offline with no API key and no external services —
+`pip install -r requirements.txt`.
 
 ```python
-from cme_python import BeliefStore, SourceKind
-from cme_python.engines import BeliefEngine, EvidenceEngine, KnowledgeGraph
+from cme_python.cme import CME
+from cme_python.models import SourceKind
 
-store = BeliefStore("cme.sqlite")
-BeliefEngine(store).ingest(
-    "Qubits can hold a superposition of states. Entanglement links two qubits.",
-    source=SourceKind.RESEARCH_PAPER,
-    locator="doi:10/x",
-    connections=["Quantum Computing"],
-)
+with CME("cme.sqlite") as cme:
+    cme.ingest(
+        "Qubits can hold a superposition of states. "
+        "Entanglement correlates two separated qubits.",
+        source=SourceKind.RESEARCH_PAPER,
+        locator="doi:10/x",
+    )
 
-evidence = EvidenceEngine(store)
-belief, relevance = evidence.retrieve("superposition")[0]
-print(evidence.justify(belief).explain())
-# "Qubits can hold a superposition of states." is grounded at 70% confidence,
-# from 1 supporting and 0 contradicting source(s): doi:10/x.
+    # The best *set* of memories for a budget, not a top-k slice:
+    # relevance is traded against redundancy so the budget buys distinct facts.
+    print(cme.context("qubits superposition", budget=40).as_prompt())
+    # Known facts, with confidence and source:
+    # - Qubits can hold a superposition of states. (70% confident; doi:10/x)
+    # - Entanglement correlates two separated qubits. (70% confident; doi:10/x)
 
-report = evidence.ground("Qubits hold superposition. The moon is made of cheese.")
-print(report.score, [c.claim for c in report.unsupported])
-# 0.5 ['The moon is made of cheese.']
-
-graph = KnowledgeGraph.from_store(store)
-print(graph.related(belief.id))   # beliefs sharing a concept
+    # The hallucination guard.
+    report = cme.verify("Entanglement correlates two separated qubits. "
+                        "Qubits are powered by steam.")
+    print(report.score, [c.claim for c in report.unsupported])
+    # 0.5 ['Qubits are powered by steam.']
 ```
+
+A claim is only grounded if a belief is both **relevant** to it and **covers**
+it. Sharing a subject word is not evidence — that is why *"Qubits are powered by
+steam"* fails against a registry full of qubit facts.
+
+### As a service
+
+```bash
+uvicorn cme_python.main:app --reload
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /ingest` | Learn from a document. Re-ingesting reinforces rather than duplicates. |
+| `POST /context` | Grounded memories for a query, inside a token budget. |
+| `POST /verify` | Check a model's answer; unsupported claims come back flagged. |
+| `GET /beliefs/{id}` | Why the engine believes something: evidence for, against, certainty. |
+| `GET /contradictions` | Stored beliefs that assert opposite things. |
+| `GET /health` | Registry size and active solver. |
+
+Configuration is environment-driven: `CME_DATABASE`, `CME_SOLVER`,
+`CME_CONTEXT_BUDGET`, `CME_MIN_CONFIDENCE`.
 
 Run the checks: `python -m pytest tests/python_tests -q`
 
 ## Status
 
-Pre-alpha. Phase 1 done (Belief, Memory, Graph, Evidence); Phase 2 next.
-Specifications live in [`docs/`](docs/):
+Pre-alpha. All seven engines and the HTTP API are in (Phases 1, 2 and 4).
+Phase 3 — porting the hot graph paths to Rust `cme-core` via PyO3/Maturin — is
+next; the Python `KnowledgeGraph` is the reference implementation its wrapper
+has to match. Specifications live in [`docs/`](docs/):
 
 - [`docs/developer-brief.md`](docs/developer-brief.md) — conceptual and technical source of truth.
 - [`docs/project-structure.md`](docs/project-structure.md) — stack, directory layout, phase plan.

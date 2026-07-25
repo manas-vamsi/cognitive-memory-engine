@@ -8,7 +8,8 @@ without deserialising every row.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+import threading
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -35,7 +36,16 @@ class BeliefStore:
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(self.path)
+        # FastAPI runs sync endpoints on a threadpool, so the connection is
+        # reached from whichever worker thread serves the request. SQLite
+        # refuses that by default; one connection plus one lock is the smallest
+        # correct answer.
+        #
+        # ponytail: a single global lock serialises every query. Right while
+        # requests are cheap; move to a per-thread connection or a pool if
+        # concurrent reads start queueing.
+        self._lock = threading.RLock()
+        self._db = sqlite3.connect(self.path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.executescript(SCHEMA)
 
@@ -46,12 +56,18 @@ class BeliefStore:
         self.close()
 
     def close(self) -> None:
-        self._db.close()
+        with self._lock:
+            self._db.close()
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
-        with self._db:
+        with self._lock, self._db:
             yield self._db
+
+    def _read(self, sql: str, params: Sequence[object] = ()) -> list[sqlite3.Row]:
+        """Rows are materialised inside the lock; a lazy cursor would escape it."""
+        with self._lock:
+            return self._db.execute(sql, params).fetchall()
 
     # --- registry operations ----------------------------------------------
 
@@ -82,8 +98,8 @@ class BeliefStore:
         return len(beliefs)
 
     def get(self, belief_id: str) -> Belief | None:
-        row = self._db.execute("SELECT data FROM beliefs WHERE id = ?", (belief_id,)).fetchone()
-        return Belief.model_validate_json(row["data"]) if row else None
+        rows = self._read("SELECT data FROM beliefs WHERE id = ?", (belief_id,))
+        return Belief.model_validate_json(rows[0]["data"]) if rows else None
 
     def delete(self, belief_id: str) -> bool:
         with self._write() as db:
@@ -96,7 +112,7 @@ class BeliefStore:
         if limit is not None:
             sql += " LIMIT ?"
             params.append(limit)
-        return [Belief.model_validate_json(r["data"]) for r in self._db.execute(sql, params)]
+        return [Belief.model_validate_json(r["data"]) for r in self._read(sql, params)]
 
     def search(self, text: str, *, limit: int = 20) -> list[Belief]:
         """Substring match on the statement.
@@ -104,7 +120,7 @@ class BeliefStore:
         ponytail: LIKE scan, not semantic search — the Evidence Engine's vector
         store is where real retrieval lands. Swap in FTS5 if this gets slow.
         """
-        rows = self._db.execute(
+        rows = self._read(
             "SELECT data FROM beliefs WHERE statement LIKE ? ORDER BY confidence DESC LIMIT ?",
             (f"%{text}%", limit),
         )
@@ -116,4 +132,4 @@ class BeliefStore:
             return db.execute("DELETE FROM beliefs WHERE confidence <= ?", (threshold,)).rowcount
 
     def __len__(self) -> int:
-        return self._db.execute("SELECT COUNT(*) AS n FROM beliefs").fetchone()["n"]
+        return self._read("SELECT COUNT(*) AS n FROM beliefs")[0]["n"]

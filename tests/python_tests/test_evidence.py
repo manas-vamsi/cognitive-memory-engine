@@ -104,6 +104,14 @@ def test_short_claims_are_verified_not_skipped(engine):
     assert [c.supported for c in report.checks] == [True, False]
 
 
+def test_a_false_claim_on_a_known_subject_is_not_grounded(engine):
+    """Sharing a subject word is not evidence — this is the guard that matters."""
+    check = engine.check("Qubits are powered by steam.")
+    assert check.relevance > 0  # topically it looks relevant
+    assert check.coverage < 0.5  # but the belief accounts for almost none of it
+    assert not check.supported
+
+
 def test_questions_are_not_treated_as_claims(engine):
     report = engine.ground("Is Rust memory safe? " + RUST)
     assert [c.claim for c in report.checks] == [RUST]
@@ -114,7 +122,7 @@ def test_a_custom_retriever_replaces_the_lexical_default():
         b = store.save(Belief(statement="Anything.", confidence=0.5))
         engine = EvidenceEngine(store, retriever=lambda q, limit: [(b, 0.99)])
         assert engine.retrieve("ignored")[0][1] == 0.99
-        assert engine.check("ignored").supported
+        assert engine.check("Anything.").supported
 
 
 if __name__ == "__main__":
