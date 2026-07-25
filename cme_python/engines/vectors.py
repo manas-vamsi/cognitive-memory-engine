@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections import defaultdict
 from collections.abc import Callable, Sequence
 from typing import Protocol, runtime_checkable
 
@@ -47,19 +48,27 @@ scored 0.23 against a belief about HTTP, higher than several genuine matches.
 4096 separates best but costs 16x the memory per belief for a margin already
 comfortable at 1024.
 
-ponytail: 1024 floats per belief is ~8KB in Python, so a 100k-belief registry
-is around 800MB in RAM. That is the point to move the index into Qdrant or
-pgvector rather than to shrink this number back down.
+Raising it costs less than it looks: vectors are stored sparsely, so a belief
+occupies its ~28 non-zero dimensions rather than all 1024. Measured at ~5.5KB
+per belief including the postings, so a 100k-belief registry is roughly 550MB —
+the point to move the index into Qdrant rather than to shrink this number.
 """
 
 NGRAM = 4
 
-Vector = list[float]
+Vector = dict[int, float]
+"""Sparse: dimension index -> weight, with zeros absent.
+
+A belief's embedding touches maybe sixty of `DIMENSIONS` slots, so a dense list
+is ~94% zeros. Storing them meant every comparison multiplied those zeros
+together — the cost of a query scaled with the size of the vector space rather
+than with the content of the two texts.
+"""
 
 
 @runtime_checkable
 class Embedder(Protocol):
-    """Anything that turns text into a fixed-length vector."""
+    """Anything that turns text into a sparse vector."""
 
     dimensions: int
 
@@ -83,13 +92,13 @@ class HashingEmbedder:
         self.ngram = ngram
 
     def embed(self, text: str) -> Vector:
-        vector = [0.0] * self.dimensions
+        vector: Vector = {}
         for feature, weight in self._features(text):
             # Signed hashing: the sign bit keeps unrelated collisions from
             # always accumulating in the same direction.
             slot = hash_feature(feature) % self.dimensions
             sign = 1.0 if hash_feature(feature + "#") % 2 else -1.0
-            vector[slot] += sign * weight
+            vector[slot] = vector.get(slot, 0.0) + sign * weight
         return normalise_vector(vector)
 
     def _features(self, text: str) -> list[tuple[str, float]]:
@@ -131,26 +140,47 @@ def hash_feature(feature: str) -> int:
 
 
 def normalise_vector(vector: Vector) -> Vector:
-    length = math.sqrt(sum(v * v for v in vector))
-    return vector if length == 0 else [v / length for v in vector]
+    length = math.sqrt(sum(v * v for v in vector.values()))
+    return vector if length == 0 else {i: v / length for i, v in vector.items()}
 
 
 def cosine(a: Vector, b: Vector) -> float:
-    """Both vectors are unit length, so the dot product is the cosine."""
-    return sum(x * y for x, y in zip(a, b, strict=True))
+    """Both vectors are unit length, so the dot product is the cosine.
+
+    Walks the shorter vector: only shared dimensions contribute, and a missing
+    dimension is a zero that need not be visited.
+    """
+    if len(b) < len(a):
+        a, b = b, a
+    return sum(weight * b[i] for i, weight in a.items() if i in b)
+
+
+def to_dense(vector: Vector, dimensions: int = DIMENSIONS) -> list[float]:
+    """Expand to a plain list, for stores that expect a dense vector."""
+    dense = [0.0] * dimensions
+    for index, weight in vector.items():
+        dense[index] = weight
+    return dense
 
 
 class VectorIndex:
     """In-memory nearest-neighbour search over belief vectors.
 
-    ponytail: brute-force scan. Exact, and fast enough for thousands of
-    beliefs; Qdrant or pgvector is the upgrade, and it slots in here without
-    the Evidence Engine noticing.
+    Exact, and now proportional to how many beliefs share a dimension with the
+    query rather than to how many exist. Qdrant is still the upgrade for large
+    registries, and slots in here without the Evidence Engine noticing.
     """
 
     def __init__(self, embedder: Embedder | None = None) -> None:
         self.embedder = embedder or HashingEmbedder()
         self._vectors: dict[str, Vector] = {}
+        self._dims: dict[int, set[str]] = defaultdict(set)
+        """dimension -> beliefs with a non-zero weight there.
+
+        The same idea as the lexical postings list. A query touches sixty-odd
+        dimensions; without this, every query scored every belief in the
+        registry, which is why 10k beliefs cost ~600ms.
+        """
 
     def __len__(self) -> int:
         return len(self._vectors)
@@ -159,28 +189,44 @@ class VectorIndex:
         # Evidence snippets are indexed with the statement: a belief is
         # findable by what supports it, not only by how it was phrased.
         text = " ".join([belief.statement, *(e.snippet for e in belief.evidence)])
-        self._vectors[belief.id] = self.embedder.embed(text)
+        self._unindex(belief.id)
+        vector = self.embedder.embed(text)
+        self._vectors[belief.id] = vector
+        for index in vector:
+            self._dims[index].add(belief.id)
 
     def add_all(self, beliefs: Sequence[Belief]) -> VectorIndex:
         for belief in beliefs:
             self.add(belief)
         return self
 
+    def _unindex(self, belief_id: str) -> None:
+        for index in self._vectors.get(belief_id, {}):
+            postings = self._dims.get(index)
+            if postings is None:
+                continue
+            postings.discard(belief_id)
+            if not postings:
+                del self._dims[index]
+
     def remove(self, belief_id: str) -> None:
+        self._unindex(belief_id)
         self._vectors.pop(belief_id, None)
 
     def clear(self) -> None:
         self._vectors.clear()
+        self._dims.clear()
 
     def search(self, query: str, limit: int = 5) -> list[tuple[str, float]]:
         """Belief ids nearest the query, best first."""
         target = self.embedder.embed(query)
-        if not any(target):
+        if not target:
             return []
-        scored = [
-            (belief_id, round(cosine(target, vector), 6))
-            for belief_id, vector in self._vectors.items()
-        ]
+        # Only beliefs sharing a dimension can have a non-zero dot product.
+        candidates: set[str] = set()
+        for index in target:
+            candidates |= self._dims.get(index, frozenset())
+        scored = [(bid, round(cosine(target, self._vectors[bid]), 6)) for bid in candidates]
         scored = [(i, s) for i, s in scored if s > 0]
         # Id as the tie-break, so equal scores do not reorder between runs.
         scored.sort(key=lambda pair: (-pair[1], pair[0]))

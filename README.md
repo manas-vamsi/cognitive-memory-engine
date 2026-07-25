@@ -193,9 +193,11 @@ cognitive-memory-engine/
 
 Lexical retrieval consults an inverted index, so a query costs roughly what it
 *matches* rather than what has ever been learnt — a selective query over 2,000
-beliefs is ~5 ms, against ~20 ms for a full scan. Vector retrieval is still a
-linear scan over every embedding; use `QdrantIndex` beyond a few thousand
-beliefs, which is what its ANN index is for.
+beliefs is ~5 ms, against ~20 ms for a full scan. Vector retrieval applies the
+same idea to embedding dimensions: embeddings are sparse (~28 non-zero of
+1,024), so only beliefs sharing a dimension get scored — a `context()` over
+10,000 beliefs went from ~1,450 ms to ~100 ms. Use `QdrantIndex` beyond tens of
+thousands, which is what its ANN index is for.
 
 **Concurrency does not help.** At 1,000 beliefs: 39 req/s with one worker,
 ~29 req/s with sixteen, and p99 climbing from 33 ms to 732 ms. The store holds a
