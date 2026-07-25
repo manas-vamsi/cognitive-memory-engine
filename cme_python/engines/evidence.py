@@ -32,6 +32,17 @@ _STOPWORDS = frozenset(
 SUPPORTED_AT = 0.15
 """Relevance below this and we call the claim ungrounded."""
 
+COVERAGE_AT = 0.5
+"""Fraction of a claim's own words the matching belief must actually contain.
+
+Relevance alone is topical, not evidential: "Qubits are powered by steam"
+scores highly against any belief about qubits, because they share the subject.
+Requiring the belief to cover most of the claim's words is a cheap stand-in for
+entailment — it rejects a sentence that merely talks about the right thing.
+Calibrated so a close paraphrase still passes; a real entailment model is the
+upgrade, and this is the knob to retune when one lands.
+"""
+
 Retriever = Callable[[str, int], list[tuple[Belief, float]]]
 
 
@@ -69,6 +80,9 @@ class ClaimCheck(BaseModel):
     claim: str
     supported: bool
     relevance: float
+    coverage: float = 0.0
+    """How much of the claim the matched belief actually accounts for."""
+
     belief: Belief | None = None
 
 
@@ -172,17 +186,42 @@ class EvidenceEngine:
 
     # --- grounding ---------------------------------------------------------
 
-    def check(self, claim: str, *, threshold: float = SUPPORTED_AT) -> ClaimCheck:
+    def check(
+        self,
+        claim: str,
+        *,
+        threshold: float = SUPPORTED_AT,
+        coverage_at: float = COVERAGE_AT,
+    ) -> ClaimCheck:
+        """Is this one sentence backed by something the engine knows?
+
+        Two gates, and both must pass: the belief has to be *relevant* to the
+        claim, and it has to *cover* the claim. Relevance alone lets a false
+        sentence through on a shared subject word.
+        """
         hits = self.retrieve(claim, limit=1)
         if not hits:
             return ClaimCheck(claim=claim, supported=False, relevance=0.0)
         belief, relevance = hits[0]
+        coverage = self.coverage(claim, belief)
+        supported = relevance >= threshold and coverage >= coverage_at
         return ClaimCheck(
             claim=claim,
-            supported=relevance >= threshold,
+            supported=supported,
             relevance=relevance,
-            belief=belief if relevance >= threshold else None,
+            coverage=coverage,
+            belief=belief if supported else None,
         )
+
+    def coverage(self, claim: str, belief: Belief) -> float:
+        """Fraction of the claim's content words the belief accounts for."""
+        wanted = set(tokenise(claim))
+        if not wanted:
+            return 0.0
+        known = self._docs.get(belief.id) or Counter(
+            tokenise(" ".join([belief.statement, *(e.snippet for e in belief.evidence)]))
+        )
+        return round(len(wanted & set(known)) / len(wanted), 6)
 
     def ground(self, text: str, *, threshold: float = SUPPORTED_AT) -> GroundingReport:
         """Check generated text claim by claim against the registry.

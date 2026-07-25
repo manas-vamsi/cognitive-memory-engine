@@ -74,6 +74,30 @@ def test_prune_removes_only_disproven_beliefs(store):
     assert [b.statement for b in store.all()] == ["alive"]
 
 
+def test_usable_from_more_than_one_thread(store):
+    """A threadpooled web server touches the connection from many threads."""
+    import threading
+
+    errors: list[Exception] = []
+
+    def work(n: int) -> None:
+        try:
+            store.save(Belief(statement=f"Claim number {n} from a worker thread."))
+            store.all()
+            len(store)
+        except Exception as exc:  # noqa: BLE001 - the point is to surface it
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert len(store) == 8
+
+
 def test_survives_reopening_the_file(tmp_path):
     db = tmp_path / "nested" / "cme.sqlite"
     with BeliefStore(db) as s:
