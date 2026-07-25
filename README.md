@@ -232,6 +232,28 @@ A claim is only grounded if a belief is both **relevant** to it and **covers**
 it. Sharing a subject word is not evidence — that is why *"Qubits are powered by
 steam"* fails against a registry full of qubit facts.
 
+### In front of any model
+
+Any object with `complete(prompt, system=None) -> str` is a client, so no SDK is
+a dependency. `OpenAIClient` and `ClaudeClient` ship as thin lazy-imported
+wrappers; a missing SDK produces an actionable message, not a traceback.
+
+```python
+from cme_python.clients import GroundedClient
+from cme_python.clients.claude_client import ClaudeClient
+
+chat = GroundedClient(cme, ClaudeClient())
+result = chat.ask("How do qubits store information?")
+
+print(result.answer)
+print(result.is_grounded, result.unsupported)
+```
+
+`ask()` fetches the memories, prompts the model with them attached, then checks
+the reply claim by claim. **An unsupported claim is reported, never silently
+rewritten** — editing the model's words here would hide the exact failure this
+layer exists to expose.
+
 ### As a service
 
 ```bash
