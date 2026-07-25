@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import math
 import re
-from collections import Counter
-from collections.abc import Callable
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterable
 
 from pydantic import BaseModel
 
@@ -160,6 +160,8 @@ class EvidenceEngine:
         self._df: Counter[str] = Counter()
         self._idf: dict[str, float] = {}
         self._seen: dict[str, str] = {}
+        self._postings: dict[str, set[str]] = defaultdict(set)
+        """term -> belief ids containing it, so a query touches only matches."""
 
     # --- lexical index -----------------------------------------------------
 
@@ -167,6 +169,7 @@ class EvidenceEngine:
         """Rebuild the whole term index. Normally `_fresh_index` avoids this."""
         self._docs = {}
         self._df = Counter()
+        self._postings = defaultdict(set)
         self._seen = {}
         self._update(self.store.all())
 
@@ -181,11 +184,14 @@ class EvidenceEngine:
             old = self._docs.get(belief.id)
             if old is not None:
                 self._df.subtract(old.keys())
+                self._unpost(belief.id, old.keys())
             terms = Counter(
                 tokenise(" ".join([belief.statement, *(e.snippet for e in belief.evidence)]))
             )
             self._docs[belief.id] = terms
             self._df.update(terms.keys())
+            for term in terms:
+                self._postings[term].add(belief.id)
         self._recompute_idf()
 
     def _forget(self, belief_ids: set[str]) -> None:
@@ -193,7 +199,20 @@ class EvidenceEngine:
             terms = self._docs.pop(belief_id, None)
             if terms is not None:
                 self._df.subtract(terms.keys())
+                self._unpost(belief_id, terms.keys())
         self._recompute_idf()
+
+    def _unpost(self, belief_id: str, terms: Iterable[str]) -> None:
+        for term in terms:
+            postings = self._postings.get(term)
+            if postings is None:
+                continue
+            postings.discard(belief_id)
+            if not postings:
+                # An empty postings set would otherwise accumulate forever as
+                # beliefs are edited, and `_recompute_idf` already drops the
+                # term's weight.
+                del self._postings[term]
 
     def _recompute_idf(self) -> None:
         n = len(self._docs) or 1
@@ -251,8 +270,16 @@ class EvidenceEngine:
         terms = tokenise(query)
         if not terms:
             return []
+        # Only beliefs that share a term with the query can score above zero,
+        # and the loop below already discarded the rest — so consult the
+        # postings lists instead of walking the whole registry. Same results,
+        # proportional to matches rather than to how much has ever been learnt.
+        candidates: set[str] = set()
+        for term in set(terms):
+            candidates |= self._postings.get(term, frozenset())
         scored: list[tuple[Belief, float]] = []
-        for belief_id, doc in self._docs.items():
+        for belief_id in candidates:
+            doc = self._docs[belief_id]
             length = sum(doc.values()) or 1
             overlap = sum(doc[t] * self._idf.get(t, 0.0) for t in terms)
             if overlap <= 0:
