@@ -354,15 +354,24 @@ uvicorn cme_python.main:app --reload
 
 | Endpoint | Purpose |
 |---|---|
+| `POST /ask` | The whole loop: memories in, model answers, reply verified. Needs `CME_LLM`. |
 | `POST /ingest` | Learn from a document. Re-ingesting reinforces rather than duplicates. |
 | `POST /context` | Grounded memories for a query, inside a token budget. |
 | `POST /verify` | Check a model's answer; unsupported claims come back flagged. |
 | `GET /beliefs/{id}` | Why the engine believes something: evidence for, against, certainty. |
 | `GET /contradictions` | Stored beliefs that assert opposite things. |
-| `GET /health` | Registry size and active solver. |
+| `POST /split` | Break multi-claim beliefs apart so each can be judged alone. |
+| `GET /health` | Registry size, active solver, whether `/ask` is enabled. |
 
 Configuration is environment-driven: `CME_DATABASE`, `CME_SOLVER`,
-`CME_CONTEXT_BUDGET`, `CME_MIN_CONFIDENCE`.
+`CME_CONTEXT_BUDGET`, `CME_MIN_CONFIDENCE`, `CME_GRAPH`, `CME_LLM`,
+`CME_LLM_MODEL`.
+
+`/ask` is the only endpoint needing a model, and it is off unless `CME_LLM` is
+set. If the connector cannot be built — SDK missing, no API key — the server
+still boots and everything else keeps working; `/ask` returns a 503 naming the
+variable to set. An optional feature should not be able to take the service
+down.
 
 Run the checks: `python -m pytest tests/python_tests -q`
 
