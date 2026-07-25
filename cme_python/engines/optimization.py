@@ -62,7 +62,7 @@ def budget_constraint(costs: Sequence[float], budget: float) -> Feasible:
     return feasible
 
 
-def _stem(word: str) -> str:
+def stem(word: str) -> str:
     """Strip a plural/third-person `s` so `qubit` and `qubits` are one term."""
     if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
         return word[:-1]
@@ -77,8 +77,8 @@ def jaccard(a: str, b: str) -> float:
     survive as separate memories — paraphrase is exactly the redundancy this
     engine exists to remove. Embedding cosine is the real fix; swap it in here.
     """
-    ta = {_stem(t) for t in tokenise(a)}
-    tb = {_stem(t) for t in tokenise(b)}
+    ta = {stem(t) for t in tokenise(a)}
+    tb = {stem(t) for t in tokenise(b)}
     if not ta or not tb:
         return 0.0
     return len(ta & tb) / len(ta | tb)
