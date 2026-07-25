@@ -69,6 +69,54 @@ def test_index_refreshes_when_the_registry_grows(engine):
     assert engine.retrieve("photosynthesis")
 
 
+def test_an_edited_belief_is_reindexed(engine):
+    """The registry size does not change on an edit, so the old check missed it.
+
+    Comparing `len(store)` meant a belief could be rewritten and retrieval would
+    keep answering from the previous text indefinitely.
+    """
+    belief = engine.retrieve(RUST)[0][0]
+    belief.statement = "Rust now discusses photosynthesis and chlorophyll instead."
+    engine.store.save(belief)
+
+    assert engine.retrieve("photosynthesis chlorophyll")
+    assert engine.retrieve("garbage collector") == []
+
+
+def test_an_equal_sized_add_and_delete_is_noticed(engine):
+    """Count stays the same, contents do not — also missed by a length check."""
+    doomed = engine.retrieve(RUST)[0][0]
+    engine.store.delete(doomed.id)
+    engine.store.save(Belief(statement="Photosynthesis converts light into sugar.", confidence=0.9))
+
+    assert len(engine.store) == 2
+    assert engine.retrieve("photosynthesis sugar")
+    assert engine.retrieve("garbage collector") == []
+
+
+def test_a_deleted_belief_leaves_the_index(engine):
+    doomed = engine.retrieve(RUST)[0][0]
+    engine.store.delete(doomed.id)
+    assert engine.retrieve("garbage collector") == []
+
+
+def test_the_incremental_index_matches_a_full_rebuild(engine):
+    """Cheap must also mean identical, or the optimisation is a bug."""
+    engine.store.save(
+        Belief(statement="Entanglement correlates two separated qubits.", confidence=0.9)
+    )
+    engine.store.save(Belief(statement="Indexes speed up database lookups.", confidence=0.7))
+    incremental = engine.retrieve("qubits entanglement superposition", limit=5)
+
+    rebuilt = EvidenceEngine(engine.store)
+    rebuilt.reindex()
+    full = rebuilt.retrieve("qubits entanglement superposition", limit=5)
+
+    assert [b.id for b, _ in incremental] == [b.id for b, _ in full]
+    for (_, a), (_, b) in zip(incremental, full, strict=True):
+        assert a == pytest.approx(b)
+
+
 def test_justify_separates_support_from_contradiction(engine):
     b = engine.retrieve(RUST)[0][0]
     assert engine.justify(b).verdict == "grounded"

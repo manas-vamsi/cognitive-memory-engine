@@ -157,36 +157,74 @@ class EvidenceEngine:
         self.store = store
         self._retriever = retriever
         self._docs: dict[str, Counter[str]] = {}
+        self._df: Counter[str] = Counter()
         self._idf: dict[str, float] = {}
-        self._indexed = -1
+        self._seen: dict[str, str] = {}
 
     # --- lexical index -----------------------------------------------------
 
     def reindex(self) -> None:
-        """Rebuild the term index over statements and evidence snippets.
+        """Rebuild the whole term index. Normally `_fresh_index` avoids this."""
+        self._docs = {}
+        self._df = Counter()
+        self._seen = {}
+        self._update(self.store.all())
 
-        ponytail: full rebuild, O(corpus). Fine while the registry is small;
-        switch to an incremental index or a real vector store when it isn't.
+    def _update(self, beliefs: list[Belief]) -> None:
+        """Add or replace beliefs in the index and recompute IDF.
+
+        Document frequency is maintained exactly rather than approximated:
+        replacing a belief subtracts its old terms before adding the new ones,
+        so an incrementally-built index matches a rebuilt one term for term.
         """
-        beliefs = self.store.all()
-        self._docs = {
-            b.id: Counter(tokenise(" ".join([b.statement, *(e.snippet for e in b.evidence)])))
-            for b in beliefs
-        }
+        for belief in beliefs:
+            old = self._docs.get(belief.id)
+            if old is not None:
+                self._df.subtract(old.keys())
+            terms = Counter(
+                tokenise(" ".join([belief.statement, *(e.snippet for e in belief.evidence)]))
+            )
+            self._docs[belief.id] = terms
+            self._df.update(terms.keys())
+        self._recompute_idf()
+
+    def _forget(self, belief_ids: set[str]) -> None:
+        for belief_id in belief_ids:
+            terms = self._docs.pop(belief_id, None)
+            if terms is not None:
+                self._df.subtract(terms.keys())
+        self._recompute_idf()
+
+    def _recompute_idf(self) -> None:
         n = len(self._docs) or 1
-        df: Counter[str] = Counter()
-        for terms in self._docs.values():
-            df.update(terms.keys())
+        df = self._df
         # Smoothed IDF with a +1 floor (scikit-learn's convention): rare terms
         # still outweigh common ones, but a term present in every belief keeps
         # a weight of 1 instead of 0 — otherwise a small or single-topic
         # registry scores every match at zero and retrieves nothing.
-        self._idf = {t: math.log((n + 1) / (c + 1)) + 1.0 for t, c in df.items()}
-        self._indexed = len(beliefs)
+        # A term can reach zero documents after a removal; drop it rather than
+        # leaving a stale weight behind.
+        self._idf = {t: math.log((n + 1) / (c + 1)) + 1.0 for t, c in df.items() if c > 0}
 
     def _fresh_index(self) -> None:
-        if self._indexed != len(self.store):
-            self.reindex()
+        """Bring the index up to date by touching only what changed.
+
+        The old version compared `len(store)` and rebuilt the entire corpus on
+        any change — so one new belief re-tokenised every other belief. Worse,
+        comparing lengths missed edits and equal-sized add/delete pairs
+        entirely, leaving the index quietly wrong.
+        """
+        current = self.store.fingerprints()
+        if current == self._seen:
+            return
+        gone = self._seen.keys() - current.keys()
+        if gone:
+            self._forget(gone)
+        changed = [bid for bid, stamp in current.items() if self._seen.get(bid) != stamp]
+        if changed:
+            fresh = [self.store.get(bid) for bid in changed]
+            self._update([b for b in fresh if b is not None])
+        self._seen = current
 
     # --- retrieval ---------------------------------------------------------
 

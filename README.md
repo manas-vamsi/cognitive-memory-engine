@@ -182,6 +182,30 @@ cognitive-memory-engine/
 
 ---
 
+## Latency, and what it cannot do yet
+
+`python benchmarks/latency.py`. One machine, indicative timings.
+
+| beliefs | `context()` lexical | vector |
+|---|---|---|
+| 1,000 | ~1 ms | ~45 ms |
+| 10,000 | ~14 ms | ~562 ms |
+
+Retrieval is a **linear scan** — 10× the beliefs, 10× the time. Comfortable to a
+few thousand; use `QdrantIndex` beyond that, which is what its ANN index is for.
+
+**Concurrency does not help.** At 1,000 beliefs: 39 req/s with one worker,
+~29 req/s with sixteen, and p99 climbing from 33 ms to 732 ms. The store holds a
+single lock across every query and the work is CPU-bound Python under the GIL,
+so extra threads only queue. Scale out with **processes plus shared state**
+(PostgreSQL + Qdrant, both supported), never with threads in one process.
+
+For a per-user deployment — one process per user, which is the usual plugin
+shape — none of that applies; the limit is how much one user accumulates.
+
+**Treat this as research infrastructure, not a service that will absorb
+traffic.** One instance saturates around 40 req/s.
+
 ## Measured, not asserted
 
 `python benchmarks/run.py` runs the claims this project makes about itself.

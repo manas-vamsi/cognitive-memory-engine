@@ -16,6 +16,7 @@ import sqlite3
 import threading
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from cme_python.models import Belief, MemoryTier
@@ -165,7 +166,15 @@ class BeliefStore:
     # --- registry operations ----------------------------------------------
 
     def save(self, belief: Belief) -> Belief:
-        """Insert or update. Saving is idempotent on belief id."""
+        """Insert or update. Saving is idempotent on belief id.
+
+        The write stamps `updated_at` itself. The lifecycle methods maintain it
+        too, but a caller assigning `belief.statement = ...` directly does not —
+        and indexes now use that stamp to decide what changed, so a belief could
+        be rewritten and retrieval would keep answering from the old text. Make
+        the write authoritative and the invariant cannot be forgotten.
+        """
+        belief.updated_at = datetime.now(UTC)
         self._exec(
             UPSERT,
             (
@@ -220,6 +229,17 @@ class BeliefStore:
             sql += " LIMIT ?"
             params.append(limit)
         return [Belief.model_validate_json(r["data"]) for r in self._read(sql, params)]
+
+    def fingerprints(self) -> dict[str, str]:
+        """Every belief id with its last-updated stamp.
+
+        The cheap half of `all()`: two indexed columns, no JSON and no Pydantic
+        parsing. Indexes use it to work out what actually changed instead of
+        rebuilding themselves, which is the difference between a new note
+        costing milliseconds and costing seconds.
+        """
+        rows = self._read("SELECT id, updated_at FROM beliefs")
+        return {row["id"]: row["updated_at"] for row in rows}
 
     def count_by_tier(self) -> dict[str, int]:
         rows = self._read("SELECT tier, COUNT(*) AS n FROM beliefs GROUP BY tier ORDER BY tier")
