@@ -14,7 +14,8 @@ from pydantic import BaseModel, Field
 from cme_python.cme import CME, GroundedContext
 from cme_python.config import settings
 from cme_python.engines.evidence import GroundingReport, Justification
-from cme_python.models import Belief, SourceKind
+from cme_python.engines.memory import MemoryStats
+from cme_python.models import Belief, MemoryTier, SourceKind
 
 engine: CME | None = None
 
@@ -46,15 +47,21 @@ class IngestRequest(BaseModel):
     source: SourceKind = SourceKind.UNKNOWN
     locator: str | None = None
     connections: list[str] = Field(default_factory=list)
+    tier: MemoryTier = MemoryTier.GENERAL
+    scope: str | None = None
 
 
 class ContextRequest(BaseModel):
     query: str = Field(min_length=1)
     budget: float | None = Field(default=None, gt=0)
+    tier: MemoryTier | None = None
+    scope: str | None = None
 
 
 class VerifyRequest(BaseModel):
     answer: str = Field(min_length=1)
+    tier: MemoryTier | None = None
+    scope: str | None = None
 
 
 class ContradictionOut(BaseModel):
@@ -78,19 +85,29 @@ def ingest(request: IngestRequest) -> list[Belief]:
         source=request.source,
         locator=request.locator,
         connections=request.connections,
+        tier=request.tier,
+        scope=request.scope,
     )
 
 
 @app.post("/context", response_model=GroundedContext)
 def context(request: ContextRequest) -> GroundedContext:
     """The best grounded memories for a query, inside a token budget."""
-    return get_engine().context(request.query, budget=request.budget)
+    return get_engine().context(
+        request.query, budget=request.budget, tier=request.tier, scope=request.scope
+    )
 
 
 @app.post("/verify", response_model=GroundingReport)
 def verify(request: VerifyRequest) -> GroundingReport:
     """Check a model's answer against the registry. Unsupported claims come back flagged."""
-    return get_engine().verify(request.answer)
+    return get_engine().verify(request.answer, tier=request.tier, scope=request.scope)
+
+
+@app.get("/memory", response_model=MemoryStats)
+def memory() -> MemoryStats:
+    """How much is remembered, broken down by tier."""
+    return get_engine().stats()
 
 
 @app.get("/beliefs/{belief_id}", response_model=Justification)

@@ -184,12 +184,14 @@ class OptimizationEngine:
         budget: float = 60,
         pool: int = 12,
         redundancy: float = 1.0,
+        within: Callable[[Belief], bool] | None = None,
     ) -> list[Belief]:
         """The best *set* of beliefs for a query within a token budget.
 
-        `budget` is in tokens, approximated by content-word count.
+        `budget` is in tokens, approximated by content-word count. `within`
+        restricts the candidates to one slice of memory.
         """
-        candidates = self.evidence.retrieve(query, limit=pool)
+        candidates = self.evidence.retrieve(query, limit=pool, within=within)
         if not candidates:
             return []
         beliefs = [b for b, _ in candidates]
