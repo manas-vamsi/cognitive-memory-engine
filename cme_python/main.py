@@ -6,11 +6,13 @@ prompts its model, and posts the answer back to be verified afterwards.
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from cme_python.clients.base import GroundedAnswer, GroundedClient, build_client
 from cme_python.cme import CME, GroundedContext
 from cme_python.config import settings
 from cme_python.engines.evidence import GroundingReport, Justification
@@ -18,6 +20,9 @@ from cme_python.engines.memory import MemoryStats
 from cme_python.models import Belief, MemoryTier, SourceKind
 
 engine: CME | None = None
+chat: GroundedClient | None = None
+
+log = logging.getLogger(__name__)
 
 
 def get_engine() -> CME:
@@ -28,11 +33,28 @@ def get_engine() -> CME:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global engine
+    global engine, chat
     engine = CME()
+    chat = _build_chat(engine)
     yield
     engine.close()
-    engine = None
+    engine = chat = None
+
+
+def _build_chat(cme: CME) -> GroundedClient | None:
+    """Wire up the configured connector, or leave /ask disabled.
+
+    A missing SDK or key must not stop the server booting: memory, retrieval and
+    verification all work without a model, and taking the whole service down
+    over an optional feature would be the wrong trade.
+    """
+    if not settings.llm:
+        return None
+    try:
+        return GroundedClient(cme, build_client(settings.llm, settings.llm_model))
+    except (RuntimeError, ValueError) as exc:
+        log.warning("/ask disabled: %s", exc)
+        return None
 
 
 app = FastAPI(
@@ -64,6 +86,11 @@ class VerifyRequest(BaseModel):
     scope: str | None = None
 
 
+class AskRequest(BaseModel):
+    question: str = Field(min_length=1)
+    budget: float | None = Field(default=None, gt=0)
+
+
 class ContradictionOut(BaseModel):
     explanation: str
     overlap: float
@@ -74,7 +101,12 @@ class ContradictionOut(BaseModel):
 @app.get("/health")
 def health() -> dict[str, object]:
     cme = get_engine()
-    return {"status": "ok", "beliefs": len(cme.store), "solver": settings.solver}
+    return {
+        "status": "ok",
+        "beliefs": len(cme.store),
+        "solver": settings.solver,
+        "ask_enabled": chat is not None,
+    }
 
 
 @app.post("/ingest", response_model=list[Belief])
@@ -102,6 +134,22 @@ def context(request: ContextRequest) -> GroundedContext:
 def verify(request: VerifyRequest) -> GroundingReport:
     """Check a model's answer against the registry. Unsupported claims come back flagged."""
     return get_engine().verify(request.answer, tier=request.tier, scope=request.scope)
+
+
+@app.post("/ask", response_model=GroundedAnswer)
+def ask(request: AskRequest) -> GroundedAnswer:
+    """Answer a question through a model, with memories attached and the reply verified.
+
+    Disabled unless `CME_LLM` names a connector — CME is useful without one, and
+    a 503 that says what to set beats an obscure auth error from a vendor SDK.
+    """
+    if chat is None:
+        raise HTTPException(
+            503,
+            "No LLM configured. Set CME_LLM=claude or CME_LLM=openai (plus the "
+            "vendor API key) to enable /ask. Every other endpoint works without it.",
+        )
+    return chat.ask(request.question, budget=request.budget)
 
 
 @app.post("/split", response_model=list[Belief])

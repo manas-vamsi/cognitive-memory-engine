@@ -103,3 +103,19 @@ def missing_sdk(package: str, vendor: str) -> RuntimeError:
         f"The {vendor} client needs `{package}`, which CME does not install by "
         f"default. Run `pip install {package}`."
     )
+
+
+def build_client(name: str, model: str = "") -> LLMClient:
+    """Construct a connector by name. Raises with the fix if it cannot.
+
+    Kept here rather than in `main` so the API layer holds no vendor knowledge.
+    """
+    if name == "claude":
+        from cme_python.clients.claude_client import ClaudeClient  # noqa: PLC0415
+
+        return ClaudeClient(model=model) if model else ClaudeClient()
+    if name == "openai":
+        from cme_python.clients.openai_client import OpenAIClient  # noqa: PLC0415
+
+        return OpenAIClient(model=model) if model else OpenAIClient()
+    raise ValueError(f"Unknown LLM {name!r}. Set CME_LLM to 'claude' or 'openai'.")

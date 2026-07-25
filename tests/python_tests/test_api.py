@@ -4,6 +4,7 @@ Run: python tests/python_tests/test_api.py
 """
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -137,6 +138,54 @@ def test_empty_payloads_are_rejected(client):
     assert client.post("/context", json={"query": ""}).status_code == 422
     assert client.post("/context", json={"query": "x", "budget": 0}).status_code == 422
     assert client.post("/verify", json={"answer": ""}).status_code == 422
+    assert client.post("/ask", json={"question": ""}).status_code == 422
+
+
+def test_ask_is_disabled_without_a_configured_model(client):
+    """The rest of the service must work with no LLM, and say so clearly."""
+    assert client.get("/health").json()["ask_enabled"] is False
+    refused = client.post("/ask", json={"question": "anything?"})
+    assert refused.status_code == 503
+    assert "CME_LLM" in refused.json()["detail"]
+
+
+def test_ask_returns_the_answer_with_its_context_and_verdict(monkeypatch):
+    """With a connector wired in, /ask is the whole loop in one call."""
+    from cme_python.clients.base import EchoClient, GroundedClient
+
+    original = main.CME
+    monkeypatch.setattr(main, "CME", lambda *a, **k: original(":memory:"))
+    monkeypatch.setattr(
+        main,
+        "_build_chat",
+        lambda cme: GroundedClient(cme, EchoClient(reply="Qubits are powered by steam.")),
+    )
+    with TestClient(main.app) as c:
+        c.post("/ingest", json={"text": DOC, "locator": "doi:10/x"})
+        assert c.get("/health").json()["ask_enabled"] is True
+
+        body = c.post("/ask", json={"question": "how do qubits work?"}).json()
+        assert body["answer"] == "Qubits are powered by steam."
+        assert body["context"]["beliefs"]  # memories were attached
+        assert body["report"]["checks"][0]["supported"] is False  # and it was caught
+
+
+def test_a_broken_connector_disables_ask_but_boots_the_server(monkeypatch):
+    """An optional feature failing must not take the whole service down."""
+
+    def explode(_name, _model=""):
+        raise RuntimeError("The Claude client needs `anthropic`. Run `pip install anthropic`.")
+
+    original = main.CME
+    monkeypatch.setattr(main, "CME", lambda *a, **k: original(":memory:"))
+    # Settings is frozen, so swap the whole object rather than a field.
+    monkeypatch.setattr(main, "settings", replace(main.settings, llm="claude"))
+    monkeypatch.setattr(main, "build_client", explode)
+
+    with TestClient(main.app) as c:
+        assert c.get("/health").json()["status"] == "ok"
+        assert c.get("/health").json()["ask_enabled"] is False
+        assert c.post("/ingest", json={"text": DOC}).status_code == 200
 
 
 if __name__ == "__main__":

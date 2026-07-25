@@ -35,5 +35,11 @@ class Settings:
     graph_backend: str = os.environ.get("CME_GRAPH", "auto")
     """`auto` uses the Rust core when built, `python` forces the reference."""
 
+    llm: str = os.environ.get("CME_LLM", "")
+    """`claude` or `openai` to enable /ask. Empty leaves the endpoint disabled."""
+
+    llm_model: str = os.environ.get("CME_LLM_MODEL", "")
+    """Overrides the connector's default model."""
+
 
 settings = Settings()
