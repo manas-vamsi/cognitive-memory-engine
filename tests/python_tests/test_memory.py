@@ -96,6 +96,27 @@ def test_unscoped_context_sees_across_tiers(cme):
     assert {b.statement for b in ctx.beliefs} == {ALICE, BOB}
 
 
+def test_scoping_applies_before_the_limit(cme):
+    """Out-of-scope beliefs must not consume result slots.
+
+    Filtering now runs on cached tier/scope rather than on loaded beliefs, so
+    this pins the property that survived the change: fill the registry with
+    strongly-matching beliefs owned by someone else, and a scoped query must
+    still return the one belief its owner can see — not an empty list because
+    the others crowded the shortlist.
+    """
+    for i in range(20):
+        cme.ingest(
+            f"Bob is allergic to substance number {i}.",
+            tier=MemoryTier.USER,
+            scope="bob",
+        )
+    found = cme.evidence.retrieve(
+        "allergic", limit=3, within=cme.memory.view(MemoryTier.USER, "alice")
+    )
+    assert [b.statement for b, _ in found] == [ALICE]
+
+
 def test_verification_is_scoped_too(cme):
     """A claim backed only by another scope is not backed for this caller."""
     assert cme.verify(BOB, tier=MemoryTier.USER, scope="bob").is_grounded
