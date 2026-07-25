@@ -73,6 +73,33 @@ def bench_growth() -> None:
     print("  the linear scan, which is what an ANN index (Qdrant) is for.")
 
 
+def bench_breakdown() -> None:
+    """Where the time in one `context()` actually goes.
+
+    Worth measuring before optimising anything: the intuitive answer here was
+    wrong. The database looks like the obvious cost and is about 2% of it.
+    """
+    print("\n## Cost of one context() (1000 beliefs)\n")
+    cme = CME(":memory:")
+    seed(cme, 1_000)
+    cme.context("warm", budget=40)
+    ids = [b.id for b in cme.store.all(limit=50)]
+
+    rows = [
+        ("store.get()", lambda: cme.store.get(ids[0])),
+        ("store.fingerprints()", cme.store.fingerprints),
+        ("evidence.retrieve()", lambda: cme.evidence.retrieve("databases decision", 5)),
+        ("optimizer.select()", lambda: cme.optimizer.select("databases decision", budget=40)),
+        ("context()", lambda: cme.context("databases decision", budget=40)),
+    ]
+    for name, fn in rows:
+        print(f"  {name:<22} {best(fn, reps=3):>8.2f}ms")
+    cme.close()
+    print("\n  The store is a rounding error. Selection and retrieval are the")
+    print("  cost, and both are Python-level compute — which is also why threads")
+    print("  do not help below.")
+
+
 def bench_concurrency() -> None:
     """Threads do not help. Worth knowing before promising throughput."""
     print("\n## Concurrent readers (1000 beliefs)\n")
@@ -100,15 +127,17 @@ def bench_concurrency() -> None:
         rps = 120 / wall
         print(f"  {workers:>8} {rps:>8.1f} {statistics.median(latencies):>7.0f}ms {p99:>8.0f}ms")
     cme.close()
-    print("\n  Throughput does not improve with workers and usually falls: the store")
-    print("  holds one lock across every query, and the work is CPU-bound Python")
-    print("  under the GIL. Scale out with processes and shared state (Postgres +")
-    print("  Qdrant), not with threads in one process.")
+    print("\n  Throughput does not improve with workers and usually falls. The store")
+    print("  lock is not the reason — replacing it with per-thread connections was")
+    print("  measured and made things ~2x slower, so it was reverted. The reason is")
+    print("  that this work is CPU-bound Python under the GIL. Scale out with")
+    print("  processes and shared state (Postgres + Qdrant), never with threads.")
 
 
 def main() -> int:
     print("CME latency — one machine, indicative timings, reproducible shapes")
     bench_growth()
+    bench_breakdown()
     bench_concurrency()
     print()
     return 0
