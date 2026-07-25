@@ -32,5 +32,8 @@ class Settings:
     min_confidence: float = _float("CME_MIN_CONFIDENCE", 0.0)
     """Beliefs below this are left out of retrieval and the graph."""
 
+    graph_backend: str = os.environ.get("CME_GRAPH", "auto")
+    """`auto` uses the Rust core when built, `python` forces the reference."""
+
 
 settings = Settings()

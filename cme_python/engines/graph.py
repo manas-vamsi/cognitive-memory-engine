@@ -89,6 +89,17 @@ class KnowledgeGraph:
     def neighbours(self, node: Node) -> set[Node]:
         return set(self._edges.get(node, ()))
 
+    def _ordered_neighbours(self, node: Node) -> list[Node]:
+        """Neighbours in a fixed (kind, key) order.
+
+        Set iteration order is not a promised ordering, so an unsorted BFS can
+        return a different — equally short — path from run to run. This engine
+        presents its path as the reasoning trace, and an explanation that
+        changes between identical queries is a defect. Sorting also makes the
+        Rust core reproduce this result exactly rather than merely equivalently.
+        """
+        return sorted(self._edges.get(node, ()))
+
     def beliefs_about(self, concept: str) -> list[Belief]:
         """Beliefs mentioning a concept, strongest first."""
         node = Node(CONCEPT, normalise(concept))
@@ -108,7 +119,9 @@ class KnowledgeGraph:
             yield node, depth
             if depth >= max_hops:
                 continue
-            for nxt in self._edges[node] - seen:
+            for nxt in self._ordered_neighbours(node):
+                if nxt in seen:
+                    continue
                 seen.add(nxt)
                 queue.append((nxt, depth + 1))
 
@@ -118,13 +131,15 @@ class KnowledgeGraph:
         One hop lands on a shared concept, two hops on the beliefs that also
         mention it — so `max_hops=2` is "other beliefs about the same things".
         """
-        out: list[tuple[int, float, Belief]] = []
+        out: list[tuple[int, float, str, Belief]] = []
         for node, depth in self.walk(Node(BELIEF, belief_id), max_hops=max_hops):
             if node.kind == BELIEF and node.key != belief_id:
                 b = self._beliefs[node.key]
-                out.append((depth, -b.confidence, b))
-        out.sort(key=lambda t: (t[0], t[1]))
-        return [b for _, _, b in out]
+                # Id is the final tie-break so equally-near, equally-confident
+                # beliefs come back in a stable order.
+                out.append((depth, -b.confidence, b.id, b))
+        out.sort(key=lambda t: t[:3])
+        return [b for *_, b in out]
 
     def path(self, start: Node, goal: Node, *, max_hops: int = 6) -> list[Node] | None:
         """Shortest chain of nodes connecting two points, or None if unreachable.
@@ -141,7 +156,7 @@ class KnowledgeGraph:
             node, depth = queue.popleft()
             if depth >= max_hops:
                 continue
-            for nxt in self._edges[node]:
+            for nxt in self._ordered_neighbours(node):
                 if nxt in came_from:
                     continue
                 came_from[nxt] = node

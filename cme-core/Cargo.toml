@@ -1,0 +1,26 @@
+[package]
+name = "cme-core"
+version = "0.1.0"
+edition = "2021"
+description = "Performance-critical core for the Cognitive Memory Engine: belief graph traversal."
+license = "MIT"
+
+[lib]
+name = "cme_core"
+# cdylib for the Python extension, rlib so `cargo test` can link the crate.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# 0.29 is the first line that supports the Python 3.14 interpreters this builds
+# against; 0.22 refuses to configure on 3.14.
+pyo3 = { version = "0.29", default-features = false, features = ["macros"] }
+
+[features]
+default = []
+# maturin enables this; plain `cargo test` must not, or the test binary fails to
+# link against libpython.
+extension-module = ["pyo3/extension-module"]
+
+[profile.release]
+lto = true
+codegen-units = 1
