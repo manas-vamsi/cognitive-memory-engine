@@ -22,6 +22,7 @@ from cme_python.engines.memory import MemoryEngine, MemoryStats
 from cme_python.engines.optimization import OptimizationEngine
 from cme_python.engines.quantum_layer import get_solver
 from cme_python.engines.reasoning import Contradiction, ReasoningEngine
+from cme_python.engines.vectors import vector_retriever
 from cme_python.models import Belief, MemoryTier, SourceKind
 from cme_python.store import BeliefStore
 
@@ -56,10 +57,15 @@ class CME:
         database: str | None = None,
         *,
         solver: str | None = None,
+        retrieval: str | None = None,
     ) -> None:
         self.store = BeliefStore(database or settings.database)
         self.beliefs = BeliefEngine(self.store)
-        self.evidence = EvidenceEngine(self.store)
+        mode = retrieval or settings.retrieval
+        self.evidence = EvidenceEngine(
+            self.store,
+            retriever=vector_retriever(self.store) if mode == "vector" else None,
+        )
         self.optimizer = OptimizationEngine(
             self.evidence, solver=get_solver(solver or settings.solver)
         )

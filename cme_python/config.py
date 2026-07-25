@@ -35,6 +35,9 @@ class Settings:
     graph_backend: str = os.environ.get("CME_GRAPH", "auto")
     """`auto` uses the Rust core when built, `python` forces the reference."""
 
+    retrieval: str = os.environ.get("CME_RETRIEVAL", "lexical")
+    """`lexical` (TF-IDF) or `vector` (embedding similarity)."""
+
     llm: str = os.environ.get("CME_LLM", "")
     """`claude` or `openai` to enable /ask. Empty leaves the endpoint disabled."""
 
