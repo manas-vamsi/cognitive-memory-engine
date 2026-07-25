@@ -21,10 +21,12 @@ Qdrant drops in behind `VectorIndex`.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from cme_python.engines.evidence import tokenise
@@ -217,6 +219,19 @@ class VectorIndex:
         self._vectors.clear()
         self._dims.clear()
 
+    @property
+    def vectors(self) -> dict[str, Vector]:
+        """Read-only view for persistence."""
+        return self._vectors
+
+    def load(self, vectors: dict[str, Vector]) -> None:
+        """Replace the contents with already-computed vectors."""
+        self.clear()
+        for belief_id, vector in vectors.items():
+            self._vectors[belief_id] = vector
+            for index in vector:
+                self._dims[index].add(belief_id)
+
     def search(self, query: str, limit: int = 5) -> list[tuple[str, float]]:
         """Belief ids nearest the query, best first."""
         target = self.embedder.embed(query)
@@ -247,15 +262,13 @@ belief matches the topic is a separate question from how much we believe it.
 """
 
 
-def vector_retriever(
-    store: BeliefStore,
-    index: VectorIndex | None = None,
-    *,
-    min_similarity: float = MIN_SIMILARITY,
-) -> Callable[[str, int], list[tuple[Belief, float]]]:
+CACHE_VERSION = 1
+
+
+class VectorRetriever:
     """A `Retriever` for `EvidenceEngine`, backed by vector search.
 
-        engine = EvidenceEngine(store, retriever=vector_retriever(store))
+        engine = EvidenceEngine(store, retriever=VectorRetriever(store))
 
     Similarity is scaled by belief confidence for the same reason the lexical
     path does it: a perfectly matching statement nobody believes should not win.
@@ -265,10 +278,95 @@ def vector_retriever(
     paid by the next question. For a memory engine, ingesting constantly is the
     normal case, not the edge case.
     """
-    index = index or VectorIndex()
-    seen: dict[str, str] = {}
 
-    def refresh() -> None:
+    def __init__(
+        self,
+        store: BeliefStore,
+        index: VectorIndex | None = None,
+        *,
+        min_similarity: float = MIN_SIMILARITY,
+        cache: str | Path | None = None,
+    ) -> None:
+        self.store = store
+        self.index = index or VectorIndex()
+        self.min_similarity = min_similarity
+        # Embeddings are the expensive part of a cold start — 618ms of the
+        # 765ms to index 10k beliefs — and they do not change unless the belief
+        # does. A per-registry cache turns process start into a load.
+        self.cache = Path(cache) if cache else None
+        self.seen: dict[str, str] = {}
+        self._loaded = False
+        self._dirty = False
+
+    # --- persistence -------------------------------------------------------
+
+    def _signature(self) -> dict[str, object]:
+        embedder = self.index.embedder
+        return {
+            "version": CACHE_VERSION,
+            "dimensions": getattr(embedder, "dimensions", DIMENSIONS),
+            "ngram": getattr(embedder, "ngram", NGRAM),
+            "embedder": type(embedder).__name__,
+        }
+
+    def load(self) -> None:
+        """Populate the index from the cache, if one matches this embedder.
+
+        The signature check is not paperwork: vectors written with different
+        dimensions or a different embedder are not wrong-looking, they are
+        silently meaningless, and every similarity computed against them would
+        be nonsense that still ranks. A mismatch discards the cache.
+        """
+        self._loaded = True
+        if self.cache is None or not self.cache.exists():
+            return
+        try:
+            payload = json.loads(self.cache.read_text(encoding="utf-8"))
+            if payload.get("signature") != self._signature():
+                return
+            vectors = {
+                belief_id: {int(dim): weight for dim, weight in vector.items()}
+                for belief_id, vector in payload["vectors"].items()
+            }
+            fingerprints = payload["fingerprints"]
+        except (OSError, ValueError, KeyError, AttributeError):
+            # A corrupt or half-written cache is a performance problem, never a
+            # correctness one: drop it and rebuild.
+            return
+        self.index.load(vectors)
+        self.seen = dict(fingerprints)
+
+    def persist(self) -> None:
+        """Write the index out. Called at shutdown, not on every change."""
+        if self.cache is None or not self._dirty:
+            # Rewriting an unchanged cache costs ~750ms at 10k beliefs and buys
+            # a byte-identical file. A read-only session should shut down clean.
+            return
+        payload = {
+            "signature": self._signature(),
+            "fingerprints": self.seen,
+            "vectors": {
+                belief_id: {str(dim): round(weight, 6) for dim, weight in vector.items()}
+                for belief_id, vector in self.index.vectors.items()
+            },
+        }
+        try:
+            self.cache.parent.mkdir(parents=True, exist_ok=True)
+            # Write beside and rename, so a crash mid-write cannot leave a
+            # truncated cache that the next start has to detect.
+            temporary = self.cache.with_suffix(self.cache.suffix + ".tmp")
+            temporary.write_text(json.dumps(payload), encoding="utf-8")
+            temporary.replace(self.cache)
+            self._dirty = False
+        except OSError:
+            return
+
+    # --- retrieval ---------------------------------------------------------
+
+    def refresh(self) -> None:
+        if not self._loaded:
+            self.load()
+        store, index, seen = self.store, self.index, self.seen
         current = store.fingerprints()
         if current == seen:
             return
@@ -279,11 +377,12 @@ def vector_retriever(
         if changed:
             fresh = [store.get(bid) for bid in changed]
             index.add_all([b for b in fresh if b is not None])
-        seen.clear()
-        seen.update(current)
+        self.seen = current
+        self._dirty = True
 
-    def retrieve(query: str, limit: int) -> list[tuple[Belief, float]]:
-        refresh()
+    def __call__(self, query: str, limit: int) -> list[tuple[Belief, float]]:
+        self.refresh()
+        store, index, min_similarity = self.store, self.index, self.min_similarity
         hits = []
         # Over-fetch, because confidence scaling can reorder the shortlist and
         # the best final score may not be the best raw similarity.
@@ -299,4 +398,25 @@ def vector_retriever(
         hits.sort(key=lambda pair: (-pair[1], pair[0].id))
         return hits[:limit]
 
-    return retrieve
+
+def vector_retriever(
+    store: BeliefStore,
+    index: VectorIndex | None = None,
+    *,
+    min_similarity: float = MIN_SIMILARITY,
+    cache: str | Path | None = None,
+) -> VectorRetriever:
+    """Build a `VectorRetriever`. Kept as a function for existing callers."""
+    return VectorRetriever(store, index, min_similarity=min_similarity, cache=cache)
+
+
+def cache_path_for(database: str) -> Path | None:
+    """Where a registry's vector cache lives, or None if it has nowhere to live.
+
+    An in-memory registry has no identity to key a cache to, and caching it
+    would mean one run reading another run's vectors for beliefs that no longer
+    exist.
+    """
+    if not database or database == ":memory:" or "://" in database:
+        return None
+    return Path(database).with_suffix(Path(database).suffix + ".vectors.json")

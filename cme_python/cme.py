@@ -22,7 +22,7 @@ from cme_python.engines.memory import MemoryEngine, MemoryStats
 from cme_python.engines.optimization import OptimizationEngine
 from cme_python.engines.quantum_layer import get_solver
 from cme_python.engines.reasoning import Contradiction, ReasoningEngine
-from cme_python.engines.vectors import vector_retriever
+from cme_python.engines.vectors import VectorRetriever, cache_path_for
 from cme_python.models import Belief, MemoryTier, SourceKind
 from cme_python.store import open_store
 
@@ -62,10 +62,12 @@ class CME:
         self.store = open_store(database or settings.database)
         self.beliefs = BeliefEngine(self.store)
         mode = retrieval or settings.retrieval
-        self.evidence = EvidenceEngine(
-            self.store,
-            retriever=vector_retriever(self.store) if mode == "vector" else None,
+        self._vectors = (
+            VectorRetriever(self.store, cache=cache_path_for(self.store.path))
+            if mode == "vector"
+            else None
         )
+        self.evidence = EvidenceEngine(self.store, retriever=self._vectors)
         self.optimizer = OptimizationEngine(
             self.evidence, solver=get_solver(solver or settings.solver)
         )
@@ -79,6 +81,10 @@ class CME:
         self.close()
 
     def close(self) -> None:
+        # Shutdown is the right moment to write the vector cache: saving on
+        # every change would cost more than the rebuild it avoids.
+        if self._vectors is not None:
+            self._vectors.persist()
         self.store.close()
 
     @property

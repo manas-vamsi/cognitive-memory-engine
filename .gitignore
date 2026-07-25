@@ -16,3 +16,4 @@ build/
 .vscode/
 # ponytail: 20MB source deck kept local, not in git history
 docs/*.pptx
+*.vectors.json
