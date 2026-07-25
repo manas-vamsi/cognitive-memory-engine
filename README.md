@@ -403,6 +403,25 @@ uvicorn cme_python.main:app --reload
 | `POST /split` | Break multi-claim beliefs apart so each can be judged alone. |
 | `GET /health` | Registry size, active solver, whether `/ask` is enabled. |
 
+### Registry: SQLite or PostgreSQL
+
+```bash
+CME_DATABASE=cme.sqlite                                   # default
+CME_DATABASE=postgresql://user:pass@localhost:5432/cme    # pip install 'psycopg[binary]'
+```
+
+SQLite allows one writer at a time, which is fine for one process and wrong for
+several — that is when Postgres earns its keep. `PostgresBeliefStore` inherits
+everything from `BeliefStore`; only genuine dialect differences are overridden,
+and **the same store tests run against both backends** in CI so they cannot
+drift.
+
+One of those differences has teeth: Postgres `LIKE` is case-sensitive and
+SQLite's is not. Since duplicate detection probes through `search()`, plain
+`LIKE` would have meant the same documents building a *different registry*
+depending on where it was stored. The Postgres store uses `ILIKE`, and a test
+asserts case-insensitive search on both.
+
 Configuration is environment-driven: `CME_DATABASE`, `CME_SOLVER`,
 `CME_CONTEXT_BUDGET`, `CME_MIN_CONFIDENCE`, `CME_GRAPH`, `CME_LLM`,
 `CME_LLM_MODEL`.

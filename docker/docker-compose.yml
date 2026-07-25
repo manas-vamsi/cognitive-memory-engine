@@ -1,11 +1,14 @@
 # Services appear here alongside the connector that uses them, never before.
-# Qdrant is here because `QdrantIndex` opens a socket to it. Memgraph and
-# PostgreSQL are still absent: the graph is in-memory and the registry is
-# SQLite, so declaring them would be config that rots and a `compose up` that
-# fails for reasons unrelated to CME.
+# Qdrant and PostgreSQL are here because `QdrantIndex` and `PostgresBeliefStore`
+# open sockets to them. Memgraph is still absent: the graph is rebuilt from the
+# registry in memory, so declaring it would be config that rots and a
+# `compose up` that fails for reasons unrelated to CME.
 #
-# Qdrant is opt-in — `docker compose --profile vector up` — because CME's
-# default retrieval needs no server at all.
+# Both are opt-in profiles, because CME's defaults need no server at all:
+#
+#   docker compose up                          # CME alone, SQLite + lexical
+#   docker compose --profile vector up         # + Qdrant
+#   docker compose --profile postgres up       # + PostgreSQL
 
 services:
   cme:
@@ -27,6 +30,23 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  postgres:
+    profiles: ["postgres"]
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: cme
+      POSTGRES_DB: cme
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   qdrant:
     profiles: ["vector"]
     image: qdrant/qdrant:latest
@@ -39,3 +59,4 @@ services:
 volumes:
   cme-data:
   qdrant-data:
+  postgres-data:

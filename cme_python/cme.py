@@ -24,7 +24,7 @@ from cme_python.engines.quantum_layer import get_solver
 from cme_python.engines.reasoning import Contradiction, ReasoningEngine
 from cme_python.engines.vectors import vector_retriever
 from cme_python.models import Belief, MemoryTier, SourceKind
-from cme_python.store import BeliefStore
+from cme_python.store import open_store
 
 
 class GroundedContext(BaseModel):
@@ -59,7 +59,7 @@ class CME:
         solver: str | None = None,
         retrieval: str | None = None,
     ) -> None:
-        self.store = BeliefStore(database or settings.database)
+        self.store = open_store(database or settings.database)
         self.beliefs = BeliefEngine(self.store)
         mode = retrieval or settings.retrieval
         self.evidence = EvidenceEngine(
