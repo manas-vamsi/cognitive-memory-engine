@@ -1,9 +1,11 @@
-# ponytail: CME only. The spec lists Memgraph, Qdrant and PostgreSQL here, but
-# nothing in the code connects to them yet — the graph is in-memory, retrieval
-# is lexical, and the registry is SQLite. Declaring three servers no code opens
-# a socket to would be config that rots and a stack that fails for reasons
-# unrelated to CME. Each service lands in this file alongside the connector
-# that uses it.
+# Services appear here alongside the connector that uses them, never before.
+# Qdrant is here because `QdrantIndex` opens a socket to it. Memgraph and
+# PostgreSQL are still absent: the graph is in-memory and the registry is
+# SQLite, so declaring them would be config that rots and a `compose up` that
+# fails for reasons unrelated to CME.
+#
+# Qdrant is opt-in — `docker compose --profile vector up` — because CME's
+# default retrieval needs no server at all.
 
 services:
   cme:
@@ -25,5 +27,15 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  qdrant:
+    profiles: ["vector"]
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
 volumes:
   cme-data:
+  qdrant-data:

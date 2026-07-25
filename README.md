@@ -290,8 +290,26 @@ without a model download, a server, or a network call.
 Be clear about what it does buy: **morphological** recall, not synonymy.
 *"requesting a webpage"* finds *"web request in Python"* because they share
 stems, not because anything understands them. True paraphrase needs real
-embeddings — swap a sentence transformer in behind the `Embedder` protocol and
-Qdrant behind `VectorIndex`; neither the Evidence Engine nor its callers change.
+embeddings — swap a sentence transformer in behind the `Embedder` protocol;
+neither the Evidence Engine nor its callers change.
+
+For a persistent index, `QdrantIndex` is that same swap already made:
+
+```bash
+docker compose --profile vector up -d      # or point at your own Qdrant
+pip install qdrant-client
+```
+
+```python
+from cme_python.engines.qdrant_index import QdrantIndex
+from cme_python.engines.vectors import vector_retriever
+
+evidence = EvidenceEngine(store, retriever=vector_retriever(store, QdrantIndex()))
+```
+
+CI runs these against a real Qdrant, including an assertion that it ranks
+*identically* to the in-memory index — a drop-in that quietly ranks differently
+is not a drop-in.
 
 Two thresholds here are measured rather than chosen, and both are load-bearing:
 at 256 dimensions hash collisions scored *"cricket scores in 1998"* at 0.23
