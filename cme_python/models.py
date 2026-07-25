@@ -129,6 +129,35 @@ class Belief(BaseModel):
         self.updated_at = _now()
         return self
 
+    def split(self, *statements: str) -> list[Belief]:
+        """Break a belief carrying several claims into one belief per claim.
+
+        The counterpart to `merge`. A statement like "Rust is fast and has no
+        garbage collector" is two claims wearing one confidence score: evidence
+        for the second silently props up the first, and neither can be refuted
+        on its own.
+
+        Each part inherits this belief's evidence, connections and confidence,
+        because the evidence genuinely was gathered for the whole sentence. They
+        diverge from the next piece of evidence onward, which is the point.
+        """
+        parts = [s.strip() for s in statements if s and s.strip()]
+        if len(parts) < 2:
+            return [self]
+        return [
+            Belief(
+                statement=part,
+                confidence=self.confidence,
+                evidence=[e.model_copy(deep=True) for e in self.evidence],
+                connections=set(self.connections),
+                source=self.source,
+                tier=self.tier,
+                scope=self.scope,
+                created_at=self.created_at,
+            )
+            for part in parts
+        ]
+
 
 DEAD_BELOW = 0.02
 _CLAMP = 0.001  # keeps log-odds finite at the extremes

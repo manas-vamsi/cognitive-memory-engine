@@ -62,6 +62,12 @@ The atomic unit of cognition — a structured object, not a slice of text:
 
 - **Evolve** — confidence rises or falls as supporting or conflicting data arrives.
 - **Merge & split** — duplicates collapse; a belief holding two ideas divides.
+  *"Rust is fast and has no garbage collector"* is two claims wearing one
+  confidence score: evidence for either silently props up the other, and neither
+  can be refuted alone. `split()` separates them, carrying the subject across so
+  the second part is a claim rather than a fragment. Detection is conservative —
+  a missed split leaves a belief coarse, a wrong split invents a claim nobody
+  made.
 - **Connect** — new links form as related concepts emerge.
 - **Decay** — a disproven belief drops to zero confidence and leaves active reasoning.
 
