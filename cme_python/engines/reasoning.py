@@ -8,7 +8,7 @@ belief's confidence moves, everything resting on it moves too).
 from __future__ import annotations
 
 import re
-from itertools import combinations
+from collections import defaultdict
 
 from pydantic import BaseModel
 
@@ -161,15 +161,28 @@ def _content(statement: str) -> set[str]:
     return {stem(t) for t in tokenise(statement) if t not in _NEGATIONS}
 
 
+def _clash_score(ca: set[str], cb: set[str], threshold: float) -> float:
+    """Overlap of two content sets, or 0.0 if they are not close enough.
+
+    Separate from `contradicts` so the registry-wide scan can reuse content sets
+    it has already built, without a second definition of what counts as a clash
+    drifting away from this one.
+    """
+    if not ca or not cb:
+        return 0.0
+    # Jaccard cannot reach the threshold unless the sets are of comparable size,
+    # and that is a length check rather than two set operations.
+    if min(len(ca), len(cb)) < threshold * max(len(ca), len(cb)):
+        return 0.0
+    overlap = len(ca & cb) / len(ca | cb)
+    return round(overlap, 6) if overlap >= threshold else 0.0
+
+
 def contradicts(a: str, b: str, *, threshold: float = CONTRADICTION_AT) -> float:
     """Overlap score if the two statements clash, else 0.0."""
     if _polarity(a) == _polarity(b):
         return 0.0
-    ca, cb = _content(a), _content(b)
-    if not ca or not cb:
-        return 0.0
-    overlap = len(ca & cb) / len(ca | cb)
-    return round(overlap, 6) if overlap >= threshold else 0.0
+    return _clash_score(_content(a), _content(b), threshold)
 
 
 class ReasoningEngine:
@@ -224,18 +237,48 @@ class ReasoningEngine:
     def contradictions(self, *, threshold: float = CONTRADICTION_AT) -> list[Contradiction]:
         """Every pair of stored beliefs that assert opposite things.
 
-        ponytail: full pairwise scan with negation parity as the signal. It
-        catches the clash that matters — the same claim asserted and denied —
-        with no LLM in the loop. Blocking on shared concepts, or an entailment
-        model, is the upgrade when the registry outgrows an O(n^2) pass.
+        Driven from the negated claims rather than from every pair. A clash
+        needs opposite polarity, so only a negated belief can start one, and
+        negations are a small minority of anything anyone writes down — the
+        affirmative majority is never compared against itself at all.
+
+        Each negated belief then looks up only the beliefs sharing a word with
+        it. That is not a heuristic: an overlap of 0.75 cannot be reached by two
+        sets with nothing in common, so a candidate that shares no word cannot
+        be a clash and the pair never needs scoring.
+
+        ponytail: negation parity is still the signal, and it catches the clash
+        that matters — the same claim asserted and denied — with no LLM in the
+        loop. An entailment model is the upgrade for reworded disagreements;
+        this is only about not paying O(n^2) to find the ones we can already see.
         """
         beliefs = self.store.all()
+        content = {b.id: _content(b.statement) for b in beliefs}
+        negated = {b.id: _polarity(b.statement) for b in beliefs}
+
+        # Only affirmative claims are indexed: they are the ones a negated
+        # belief will be looking for, and indexing the rest would cost memory to
+        # find pairs that are thrown away on the polarity check anyway.
+        postings: dict[str, list[str]] = defaultdict(list)
+        for belief in beliefs:
+            if not negated[belief.id]:
+                for token in content[belief.id]:
+                    postings[token].append(belief.id)
+
+        by_id = {b.id: b for b in beliefs}
         found = []
-        for a, b in combinations(beliefs, 2):
-            overlap = contradicts(a.statement, b.statement, threshold=threshold)
-            if overlap:
-                found.append(Contradiction(a=a, b=b, overlap=overlap))
-        found.sort(key=lambda c: c.overlap, reverse=True)
+        for belief in beliefs:
+            if not negated[belief.id] or not content[belief.id]:
+                continue
+            candidates = {
+                other for token in content[belief.id] for other in postings.get(token, ())
+            }
+            for other_id in candidates:
+                overlap = _clash_score(content[belief.id], content[other_id], threshold)
+                if overlap:
+                    found.append(Contradiction(a=by_id[other_id], b=belief, overlap=overlap))
+        # Ties broken by id so the order does not depend on set iteration.
+        found.sort(key=lambda c: (-c.overlap, c.a.id, c.b.id))
         return found
 
     def resolve(self, clash: Contradiction, *, force: float = 0.5) -> Belief:

@@ -1,5 +1,6 @@
 """Self-check for the Reasoning Engine. Run: python tests/python_tests/test_reasoning.py"""
 
+import random
 import sys
 from pathlib import Path
 
@@ -94,6 +95,39 @@ def test_contradictions_finds_the_clashing_pair_only(setup):
     assert len(found) == 1
     assert {found[0].a.id, found[0].b.id} == {yes.id, no.id}
     assert "contradicts" in found[0].explain()
+
+
+def test_blocking_finds_exactly_what_a_full_pairwise_scan_would():
+    """The index is an optimisation, so it has to be invisible in the answer.
+
+    Detection compares only beliefs sharing a word with a negated claim. That is
+    sound rather than approximate — a 0.75 overlap is unreachable by two sets
+    with nothing in common — and this is the check that keeps it honest.
+    """
+    from itertools import combinations
+
+    rng = random.Random(7)
+    subjects = ["Rust", "Python", "Go", "Java", "Zig", "Elixir"]
+    predicates = ["a garbage collector", "static typing", "a virtual machine", "an ownership model"]
+    statements = [
+        f"{rng.choice(subjects)} has {'no ' if rng.random() < 0.5 else ''}{rng.choice(predicates)}."
+        for _ in range(60)
+    ]
+    statements += [f"Qubits can hold a superposition of states {i}." for i in range(20)]
+
+    with BeliefStore() as store:
+        store.save_all([Belief(statement=s) for s in statements])
+        beliefs = store.all()
+        expected = {
+            frozenset((a.id, b.id))
+            for a, b in combinations(beliefs, 2)
+            if contradicts(a.statement, b.statement)
+        }
+        found = ReasoningEngine(store).contradictions()
+
+        assert expected  # the corpus must actually contain clashes to prove anything
+        assert {frozenset((c.a.id, c.b.id)) for c in found} == expected
+        assert len(found) == len(expected)  # and no pair reported twice
 
 
 def test_the_better_evidenced_side_wins_and_the_other_is_weakened(setup):
