@@ -172,6 +172,23 @@ def test_decayed_confidence_reaches_retrieval(memory):
 # --- supersession and the timeline ------------------------------------------
 
 
+def test_stats_do_not_count_retired_beliefs_as_remembered(memory):
+    """Reporting them would promise memory that no query can return."""
+    old, new = memory.remember(
+        [Belief(statement="Old rate."), Belief(statement="New rate.")],
+        tier=MemoryTier.PROJECT,
+    )
+    before = memory.stats()
+    memory.supersede(old.id, new.id)
+    after = memory.stats()
+
+    assert after.total == before.total - 1
+    assert after.retired == 1
+    assert after.stored == before.stored  # nothing left the registry
+    assert after.by_tier["project"] == 1
+    assert after.total == len(memory.recall())  # the two agree
+
+
 def test_a_superseded_belief_leaves_recall_but_not_the_registry(memory):
     old, new = memory.remember(
         [Belief(statement="The rate is 4%."), Belief(statement="The rate is 5%.")],

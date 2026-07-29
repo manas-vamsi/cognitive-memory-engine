@@ -102,9 +102,14 @@ class ContradictionOut(BaseModel):
 @app.get("/health")
 def health() -> dict[str, object]:
     cme = get_engine()
+    stats = cme.stats()
     return {
         "status": "ok",
-        "beliefs": len(cme.store),
+        # Live beliefs, matching /memory. Reporting rows would count retired
+        # ones as memory, and the two endpoints would disagree about the size
+        # of the same registry.
+        "beliefs": stats.total,
+        "retired": stats.retired,
         "solver": settings.solver,
         "ask_enabled": chat is not None,
     }

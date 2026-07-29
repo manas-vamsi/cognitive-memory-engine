@@ -38,7 +38,15 @@ for.
 
 class MemoryStats(BaseModel):
     total: int
+    """Beliefs in play — what recall can reach."""
     by_tier: dict[str, int]
+    retired: int = 0
+    """Superseded beliefs: still stored, still auditable, never returned."""
+
+    @property
+    def stored(self) -> int:
+        """Rows in the registry, retired ones included."""
+        return self.total + self.retired
 
 
 class MemoryView(BaseModel):
@@ -180,4 +188,14 @@ class MemoryEngine:
         return moved
 
     def stats(self) -> MemoryStats:
-        return MemoryStats(total=len(self.store), by_tier=self.store.count_by_tier())
+        """What is remembered. `total` counts what recall can reach.
+
+        A retired belief is still stored and still auditable, but reporting it
+        as remembered would promise memory that no query can return.
+        """
+        by_tier = self.store.count_by_tier()
+        return MemoryStats(
+            total=sum(by_tier.values()),
+            by_tier=by_tier,
+            retired=self.store.count_retired(),
+        )

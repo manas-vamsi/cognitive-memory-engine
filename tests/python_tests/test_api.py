@@ -219,6 +219,20 @@ def test_reconcile_endpoint_acts_on_what_contradictions_only_reports(client):
     assert client.get(f"/beliefs/{done[0]['loser']}/timeline").json()[-1]["cause"] == "superseded"
 
 
+def test_health_and_memory_agree_on_the_size_of_the_registry(client):
+    client.post("/ingest", json={"text": "Rust has a garbage collector."})
+    for locator in ("rust-lang.org", "the Rust Book", "the ownership RFC"):
+        client.post("/ingest", json={"text": "Rust has no garbage collector.", "locator": locator})
+    client.post("/maintain")
+
+    health, memory = client.get("/health").json(), client.get("/memory").json()
+    assert health["beliefs"] == memory["total"]
+    assert health["retired"] == memory["retired"] == 1
+    assert memory["total"] == len(
+        client.post("/context", json={"query": "garbage"}).json()["beliefs"]
+    )
+
+
 def test_maintain_does_the_three_upkeep_jobs_in_one_pass(cme):
     from datetime import UTC, datetime, timedelta
 

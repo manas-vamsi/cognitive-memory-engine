@@ -291,8 +291,22 @@ class BeliefStore:
         return {row["id"]: row["updated_at"] for row in rows}
 
     def count_by_tier(self) -> dict[str, int]:
-        rows = self._read("SELECT tier, COUNT(*) AS n FROM beliefs GROUP BY tier ORDER BY tier")
+        """Live beliefs per tier — what recall would actually return.
+
+        Retired beliefs are excluded, for the same reason `all()` excludes them.
+        Counting them here would report memory that no query can reach.
+        """
+        rows = self._read(
+            "SELECT tier, COUNT(*) AS n FROM beliefs WHERE superseded_by IS NULL "
+            "GROUP BY tier ORDER BY tier"
+        )
         return {row["tier"]: row["n"] for row in rows}
+
+    def count_retired(self) -> int:
+        """Beliefs kept on record but out of recall."""
+        return self._read("SELECT COUNT(*) AS n FROM beliefs WHERE superseded_by IS NOT NULL")[0][
+            "n"
+        ]
 
     def search(self, text: str, *, limit: int = 20) -> list[Belief]:
         """Substring match on the statement, case-insensitively.
