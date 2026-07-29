@@ -94,7 +94,7 @@ Ageing, reconciling and pruning are each opt-in, which left nothing to put on a
 schedule. `maintain()` is that one thing:
 
 ```python
-done = cme.maintain()          # or POST /maintain, nightly
+done = cme.maintain()  # or POST /maintain, nightly
 # Maintenance(decayed=14, weakened=2, retired=1, pruned=3)
 ```
 
