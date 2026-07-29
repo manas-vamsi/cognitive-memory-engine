@@ -194,27 +194,43 @@ class BeliefStore:
         be rewritten and retrieval would keep answering from the old text. Make
         the write authoritative and the invariant cannot be forgotten.
         """
-        belief.updated_at = datetime.now(UTC)
-        self._exec(
-            UPSERT,
-            (
-                belief.id,
-                belief.statement,
-                belief.confidence,
-                str(belief.source),
-                str(belief.tier),
-                belief.scope,
-                belief.created_at.isoformat(),
-                belief.updated_at.isoformat(),
-                belief.superseded_by,
-                belief.model_dump_json(),
-            ),
-        )
+        self._exec(UPSERT, self._row(belief))
         return belief
 
+    def _row(self, belief: Belief) -> tuple:
+        """The belief as a row, stamping `updated_at` on the way past."""
+        belief.updated_at = datetime.now(UTC)
+        return (
+            belief.id,
+            belief.statement,
+            belief.confidence,
+            str(belief.source),
+            str(belief.tier),
+            belief.scope,
+            belief.created_at.isoformat(),
+            belief.updated_at.isoformat(),
+            belief.superseded_by,
+            belief.model_dump_json(),
+        )
+
     def save_all(self, beliefs: list[Belief]) -> int:
-        for b in beliefs:
-            self.save(b)
+        """Save many beliefs in one transaction.
+
+        Not a loop over `save`. A transaction ends in a disk sync, and a sync
+        costs about the same whether it is flushing one row or a thousand — so
+        saving a document's worth of beliefs one at a time paid that price per
+        belief. Ingest is the caller that feels it: it produces beliefs in
+        batches and used to commit each one separately.
+
+        All or nothing, which is also the more correct behaviour: a document
+        half-ingested because the process died between two of its claims leaves
+        a registry nobody can reason about.
+        """
+        if not beliefs:
+            return 0
+        rows = [self._row(b) for b in beliefs]
+        with self._write() as db:
+            db.executemany(self._sql(UPSERT), rows)
         return len(beliefs)
 
     def get(self, belief_id: str) -> Belief | None:

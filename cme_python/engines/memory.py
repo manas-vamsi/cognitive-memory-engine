@@ -75,12 +75,13 @@ class MemoryEngine:
         tier: MemoryTier = MemoryTier.GENERAL,
         scope: str | None = None,
     ) -> list[Belief]:
-        """File beliefs into a tier and persist them."""
+        """File beliefs into a tier and persist them, in one transaction."""
         filed = []
         for belief in beliefs:
             belief.tier = tier
             belief.scope = scope
-            filed.append(self.store.save(belief))
+            filed.append(belief)
+        self.store.save_all(filed)
         return filed
 
     def recall(
