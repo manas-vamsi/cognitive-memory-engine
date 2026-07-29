@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def _now() -> datetime:
@@ -86,6 +86,27 @@ class Belief(BaseModel):
 
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
+    """When the row last changed. Indexes use this to detect what to reindex."""
+
+    confidence_at: datetime = Field(default_factory=_now)
+    """When the current confidence was last computed.
+
+    Deliberately not `updated_at`. Ageing needs the age of the *number*, while
+    indexes need the age of the *row* — and a rewritten statement changes the
+    row without touching confidence. `decay` moves this stamp forward too:
+    halving is memoryless, so ageing the gap since the last calculation is
+    identical to ageing the whole span, and it cannot compound.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _stamp_legacy_rows(cls, data: object) -> object:
+        # Rows written before this field existed would otherwise load as though
+        # their confidence were calculated the moment we read them, which resets
+        # the age of every belief in an old registry on first open.
+        if isinstance(data, dict) and "confidence_at" not in data and "updated_at" in data:
+            data = {**data, "confidence_at": data["updated_at"]}
+        return data
 
     @field_validator("statement")
     @classmethod
@@ -101,7 +122,7 @@ class Belief(BaseModel):
         """Attach evidence and let it move confidence. Returns self."""
         self.evidence.append(ev)
         self.confidence = _shift(self.confidence, ev.strength, ev.supports)
-        self.updated_at = _now()
+        self.updated_at = self.confidence_at = _now()
         return self
 
     def connect(self, *labels: str) -> Belief:
@@ -126,7 +147,8 @@ class Belief(BaseModel):
         self.confidence = (self.confidence * w_self + other.confidence * w_other) / (
             w_self + w_other
         )
-        self.updated_at = _now()
+        # A merge brings evidence with it, so it counts as reinforcement.
+        self.updated_at = self.confidence_at = _now()
         return self
 
     def split(self, *statements: str) -> list[Belief]:

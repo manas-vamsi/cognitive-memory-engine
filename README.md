@@ -69,7 +69,11 @@ The atomic unit of cognition — a structured object, not a slice of text:
   a missed split leaves a belief coarse, a wrong split invents a claim nobody
   made.
 - **Connect** — new links form as related concepts emerge.
-- **Decay** — a disproven belief drops to zero confidence and leaves active reasoning.
+- **Decay** — a disproven belief drops to zero confidence and leaves active
+  reasoning. Time fades a belief too: `decay()` halves the confidence of
+  anything nothing has reinforced, six months by default. It stops at a floor,
+  because silence is not a refutation — an unfashionable fact still ranks, it
+  just stops outranking last week's. Opt-in; nothing calls it for you.
 
 ---
 
@@ -430,6 +434,7 @@ uvicorn cme_python.main:app --reload
 | `GET /beliefs/{id}` | Why the engine believes something: evidence for, against, certainty. |
 | `GET /contradictions` | Stored beliefs that assert opposite things. |
 | `POST /split` | Break multi-claim beliefs apart so each can be judged alone. |
+| `POST /decay` | Age beliefs nothing has reinforced. Opt-in; nothing runs it for you. |
 | `GET /health` | Registry size, active solver, whether `/ask` is enabled. |
 
 ### Registry: SQLite or PostgreSQL
