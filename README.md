@@ -258,6 +258,18 @@ same idea to embedding dimensions: embeddings are sparse (~28 non-zero of
 10,000 beliefs went from ~1,450 ms to ~100 ms. Use `QdrantIndex` beyond tens of
 thousands, which is what its ANN index is for.
 
+**Contradiction detection** no longer compares every pair. Only negated claims
+can start a clash, and each is scored against the beliefs sharing a word with it
+— sound rather than approximate, since a 0.75 overlap is unreachable by two sets
+with nothing in common. Verified to return exactly what the full pairwise scan
+returned, on a corpus with 1,312 real clashes:
+
+| beliefs | pairwise | blocked |
+|---|---|---|
+| 500 | 1.4 s | 37 ms |
+| 1,000 | 6.2 s | 113 ms |
+| 2,000 | 27.9 s | **158 ms** |
+
 **Writes.** A file-backed registry runs in WAL mode, which measured **~4.5×
 faster on `save`** than SQLite's default rollback journal — the journal copies
 every page it is about to change into a second file and waits for that to reach
