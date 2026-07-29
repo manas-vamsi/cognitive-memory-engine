@@ -50,6 +50,42 @@ class MemoryTier(StrEnum):
     PROJECT = "project"
 
 
+class Change(StrEnum):
+    """Why a belief's confidence moved.
+
+    Knowing a belief sits at 0.3 says little; knowing it was born at 0.8, was
+    contradicted twice and then faded is a different claim about the world than
+    one that has simply never been mentioned again.
+    """
+
+    CREATED = "created"
+    EVIDENCE = "evidence"
+    MERGED = "merged"
+    SPLIT = "split"
+    DECAYED = "decayed"
+    SUPERSEDED = "superseded"
+
+
+class Revision(BaseModel):
+    """One entry in a belief's timeline: what changed it, when, and to what."""
+
+    at: datetime = Field(default_factory=_now)
+    cause: Change
+    confidence: float = Field(ge=0.0, le=1.0)
+    """Confidence *after* the change, so the list reads as a curve."""
+    note: str | None = None
+    """What did it — an evidence locator, or the id of the other belief."""
+
+
+HISTORY_LIMIT = 100
+"""Revisions kept per belief, newest wins.
+
+ponytail: a flat cap, because history rides in the belief's JSON row and a
+belief reinforced ten thousand times would otherwise make every read of it
+expensive. Move to a side table if anyone needs the full audit trail.
+"""
+
+
 class Evidence(BaseModel):
     """A verifiable source snippet that supports or contradicts a belief."""
 
@@ -98,6 +134,32 @@ class Belief(BaseModel):
     identical to ageing the whole span, and it cannot compound.
     """
 
+    history: list[Revision] = Field(default_factory=list)
+    """How the confidence got to where it is, oldest first.
+
+    The point of the engine is knowledge that changes; a bare number cannot say
+    whether it changed because the world did, because someone found a better
+    source, or because nobody has looked in a year.
+    """
+
+    superseded_by: str | None = None
+    """The belief that replaced this one, if a better-sourced claim arrived.
+
+    Distinct from being disproven. A superseded belief was not wrong so much as
+    overtaken, and its timeline is why the replacement is trusted — so it leaves
+    active recall but is never deleted.
+    """
+
+    @model_validator(mode="after")
+    def _open_the_timeline(self) -> Belief:
+        if not self.history:
+            # Dated from creation, not from now: a belief loaded out of a
+            # registry written before timelines existed was not born today.
+            self.history = [
+                Revision(at=self.created_at, cause=Change.CREATED, confidence=self.confidence)
+            ]
+        return self
+
     @model_validator(mode="before")
     @classmethod
     def _stamp_legacy_rows(cls, data: object) -> object:
@@ -118,11 +180,48 @@ class Belief(BaseModel):
 
     # --- lifecycle: beliefs are alive -------------------------------------
 
+    def record(self, cause: Change, note: str | None = None, *, at: datetime | None = None) -> None:
+        """Append to the timeline and move the confidence clock with it.
+
+        Every path that changes confidence goes through here, so the timeline
+        cannot drift out of step with the number it explains.
+        """
+        self.confidence_at = at or _now()
+        self.updated_at = self.confidence_at
+        self.history.append(
+            Revision(at=self.confidence_at, cause=cause, confidence=self.confidence, note=note)
+        )
+        del self.history[:-HISTORY_LIMIT]
+
+    @property
+    def last_verified(self) -> datetime:
+        """When evidence last spoke to this claim — not when the row last moved.
+
+        Decay and renaming touch a belief without anyone checking whether it is
+        still true. This is the honest answer to "how stale is this?".
+        """
+        checked = [r.at for r in self.history if r.cause in (Change.EVIDENCE, Change.MERGED)]
+        return max(checked) if checked else self.created_at
+
     def add_evidence(self, ev: Evidence) -> Belief:
         """Attach evidence and let it move confidence. Returns self."""
         self.evidence.append(ev)
         self.confidence = _shift(self.confidence, ev.strength, ev.supports)
-        self.updated_at = self.confidence_at = _now()
+        self.record(Change.EVIDENCE, ev.locator or ev.snippet[:60])
+        return self
+
+    def supersede(self, replacement: Belief) -> Belief:
+        """Retire this belief in favour of a better-sourced one. Returns self.
+
+        Not a merge: merging assumes both claims are the same claim. This is for
+        the case where the new belief *contradicts* the old one and wins — a
+        revised figure, a repealed rule — where averaging the two would invent a
+        number nobody ever claimed.
+        """
+        if replacement.id == self.id:
+            return self
+        self.superseded_by = replacement.id
+        self.record(Change.SUPERSEDED, replacement.id)
         return self
 
     def connect(self, *labels: str) -> Belief:
@@ -148,7 +247,7 @@ class Belief(BaseModel):
             w_self + w_other
         )
         # A merge brings evidence with it, so it counts as reinforcement.
-        self.updated_at = self.confidence_at = _now()
+        self.record(Change.MERGED, other.id)
         return self
 
     def split(self, *statements: str) -> list[Belief]:
@@ -166,7 +265,7 @@ class Belief(BaseModel):
         parts = [s.strip() for s in statements if s and s.strip()]
         if len(parts) < 2:
             return [self]
-        return [
+        children = [
             Belief(
                 statement=part,
                 confidence=self.confidence,
@@ -176,9 +275,16 @@ class Belief(BaseModel):
                 tier=self.tier,
                 scope=self.scope,
                 created_at=self.created_at,
+                # The parts inherit the parent's past: the evidence behind them
+                # was gathered before the split, and dropping the timeline would
+                # make each part look newly asserted with no support.
+                history=[r.model_copy(deep=True) for r in self.history],
             )
             for part in parts
         ]
+        for child in children:
+            child.record(Change.SPLIT, self.id)
+        return children
 
 
 DEAD_BELOW = 0.02

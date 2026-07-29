@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS beliefs (
     scope      TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    superseded_by TEXT,
     data       TEXT NOT NULL
 );
 """
@@ -44,12 +45,14 @@ INDEXES = [
 ADDED_COLUMNS = {
     "tier": "TEXT NOT NULL DEFAULT 'general'",
     "scope": "TEXT",
+    "superseded_by": "TEXT",
 }
 """Columns introduced after the first release, applied to older databases."""
 
 UPSERT = """INSERT INTO beliefs
-       (id, statement, confidence, source, tier, scope, created_at, updated_at, data)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (id, statement, confidence, source, tier, scope, created_at, updated_at,
+        superseded_by, data)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
    ON CONFLICT(id) DO UPDATE SET
        statement=excluded.statement,
        confidence=excluded.confidence,
@@ -57,6 +60,7 @@ UPSERT = """INSERT INTO beliefs
        tier=excluded.tier,
        scope=excluded.scope,
        updated_at=excluded.updated_at,
+       superseded_by=excluded.superseded_by,
        data=excluded.data"""
 
 
@@ -186,6 +190,7 @@ class BeliefStore:
                 belief.scope,
                 belief.created_at.isoformat(),
                 belief.updated_at.isoformat(),
+                belief.superseded_by,
                 belief.model_dump_json(),
             ),
         )
@@ -210,14 +215,22 @@ class BeliefStore:
         tier: MemoryTier | None = None,
         scope: str | None = None,
         limit: int | None = None,
+        include_retired: bool = False,
     ) -> list[Belief]:
         """Beliefs above a confidence floor, strongest first.
 
         `tier` and `scope` narrow recall to one body of memory. Filtering in SQL
         rather than in Python keeps the index doing the work.
+
+        Superseded beliefs are left out by default — this is the one gate every
+        reader passes through, so retiring a claim here retires it everywhere
+        rather than in whichever call sites remembered to check. `include_retired`
+        is for the callers that must see everything: deletion, and the timeline.
         """
         sql = "SELECT data FROM beliefs WHERE confidence >= ?"
         params: list[object] = [min_confidence]
+        if not include_retired:
+            sql += " AND superseded_by IS NULL"
         if tier is not None:
             sql += " AND tier = ?"
             params.append(str(tier))
@@ -237,8 +250,12 @@ class BeliefStore:
         parsing. Indexes use it to work out what actually changed instead of
         rebuilding themselves, which is the difference between a new note
         costing milliseconds and costing seconds.
+
+        Superseded beliefs are absent for the same reason they are absent from
+        `all()` — an index syncing against this treats a missing id as deleted,
+        which is precisely what retiring a claim should mean to retrieval.
         """
-        rows = self._read("SELECT id, updated_at FROM beliefs")
+        rows = self._read("SELECT id, updated_at FROM beliefs WHERE superseded_by IS NULL")
         return {row["id"]: row["updated_at"] for row in rows}
 
     def count_by_tier(self) -> dict[str, int]:

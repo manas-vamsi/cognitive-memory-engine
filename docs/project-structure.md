@@ -39,6 +39,25 @@ To build a high-performance, future-proof cognitive operating system, we utilize
     *   **Choice:** **PostgreSQL** or **SQLite** (for lightweight local development).
     *   **Why:** Best for keeping track of structured belief records (Confidence Scores, Timestamps, Source metadata) [6].
 
+### Time-Aware Belief Evolution
+A belief is not a row that sits still until someone deletes it. Every change to
+its confidence is appended to a **revision timeline** stored alongside it, so the
+registry can answer *how* knowledge got to its current state, not just what that
+state is:
+
+| Field | What it records |
+| :--- | :--- |
+| `history` | Every revision: when, what caused it, and the confidence it left behind. |
+| `Change` | Why the number moved — `created`, `evidence`, `merged`, `split`, `decayed`, `superseded`. |
+| `confidence_at` | When the current confidence was last computed. Ageing measures from here. |
+| `last_verified` | When evidence last spoke to the claim — not when the row last moved. |
+| `superseded_by` | The belief that replaced this one. It leaves recall; it is never deleted. |
+
+This is what separates a cognitive memory from a vector store. A belief can gain
+confidence, lose it, merge, split, fade for want of attention, or be overtaken by
+a better-sourced claim — and each of those is a different statement about the
+world, distinguishable after the fact rather than collapsed into one number.
+
 ---
 
 ## 2. Recommended Directory Structure
@@ -59,6 +78,10 @@ cognitive-memory-engine/
 ├── cme_python/                  # --- PYTHON SDK & ORCHESTRATION ---
 │   ├── __init__.py
 │   ├── config.py                # Global settings (DB URIs, LLM API keys)
+│   ├── models.py                # Belief, Evidence, and the Revision timeline
+│   ├── store.py                 # Belief registry (SQLite) + schema migration
+│   ├── postgres_store.py        # The same store contract, on PostgreSQL
+│   ├── cme.py                   # The facade: ingest / context / verify
 │   ├── main.py                  # FastAPI server entry point
 │   │
 │   ├── engines/                 # The Seven Cognitive Engines

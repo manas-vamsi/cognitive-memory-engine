@@ -55,7 +55,8 @@ The atomic unit of cognition — a structured object, not a slice of text:
 | **Confidence** | Dynamic certainty rating | `0.97` |
 | **Evidence** | Tracked, verifiable sources | TensorFlow docs, PyTorch repo, papers |
 | **Connections** | Semantic links to other nodes | `Programming`, `Machine Learning`, `Deep Learning` |
-| **Timestamp** | When learned / last updated | `created`, `updated` |
+| **Timestamp** | When learned / last updated / last verified | `created`, `updated`, `last_verified` |
+| **History** | Every change to the confidence, and what caused it | `created 0.5 → evidence 0.78 → decayed 0.61` |
 | **Source** | Structural origin | Official docs, research papers, books |
 
 ### Beliefs are alive
@@ -74,6 +75,51 @@ The atomic unit of cognition — a structured object, not a slice of text:
   anything nothing has reinforced, six months by default. It stops at a floor,
   because silence is not a refutation — an unfashionable fact still ranks, it
   just stops outranking last week's. Opt-in; nothing calls it for you.
+- **Be superseded** — a repealed rule, a revised figure. `supersede()` retires
+  the old claim in favour of the new one: it leaves recall immediately but is
+  never deleted, because *why* the replacement is trusted is part of the record.
+  Distinct from being disproven, and distinct from a merge — averaging "the rate
+  is 4%" with "the rate is 5%" invents a number nobody ever claimed.
+
+### Time-aware belief evolution
+
+Most memory systems store what is currently believed. CME stores **how the
+belief got there**. Every change to a confidence is appended to the belief's own
+timeline, with the reason:
+
+```text
+Belief  "The base rate is 4%."
+  created     0.50   ·  filed from an ingested document
+  evidence    0.78   ·  bankofengland.co.uk/rates
+  merged      0.81   ·  folded in a duplicate from another source
+  decayed     0.61   ·  eight months with nobody checking
+  superseded  0.61   ·  replaced by "The base rate is 5%."
+```
+
+```python
+for change in cme.timeline(belief_id):
+    print(change.at, change.cause, change.confidence, change.note)
+```
+
+That distinction is the point. A belief at 0.61 because it was contradicted
+twice is a different claim about the world than one at 0.61 because nobody has
+looked at it in a year — and a bare score cannot tell you which. `last_verified`
+answers *"how stale is this?"* honestly, because it ignores the changes nobody
+checked: decay moves a belief without anyone asking whether it is still true.
+
+| Cause | What happened |
+|---|---|
+| `created` | Filed for the first time. |
+| `evidence` | A source spoke to the claim, for or against. |
+| `merged` | A duplicate was folded in. |
+| `split` | Inherited from a parent belief that carried two claims. |
+| `decayed` | Faded with time; nobody has reinforced it. |
+| `superseded` | Overtaken by a better-sourced claim. |
+
+Timelines ride in the belief's own row, so they survive a restart with no extra
+storage and no migration. They are capped at the most recent 100 revisions —
+a belief reinforced ten thousand times should not make every read of it
+expensive.
 
 ---
 
@@ -432,6 +478,8 @@ uvicorn cme_python.main:app --reload
 | `POST /context` | Grounded memories for a query, inside a token budget. |
 | `POST /verify` | Check a model's answer; unsupported claims come back flagged. |
 | `GET /beliefs/{id}` | Why the engine believes something: evidence for, against, certainty. |
+| `GET /beliefs/{id}/timeline` | How that belief's confidence got where it is: every change, in order. |
+| `POST /beliefs/{id}/supersede` | Retire a belief in favour of one that replaces it. |
 | `GET /contradictions` | Stored beliefs that assert opposite things. |
 | `POST /split` | Break multi-claim beliefs apart so each can be judged alone. |
 | `POST /decay` | Age beliefs nothing has reinforced. Opt-in; nothing runs it for you. |

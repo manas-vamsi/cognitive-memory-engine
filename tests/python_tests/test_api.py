@@ -170,6 +170,31 @@ def test_ask_returns_the_answer_with_its_context_and_verdict(monkeypatch):
         assert body["report"]["checks"][0]["supported"] is False  # and it was caught
 
 
+def test_the_timeline_endpoint_shows_how_a_belief_got_here(client):
+    text = "Elixir runs on the BEAM virtual machine."
+    belief_id = client.post("/ingest", json={"text": text, "locator": "doc:1"}).json()[0]["id"]
+    client.post("/ingest", json={"text": text, "locator": "doc:2"})
+    causes = [r["cause"] for r in client.get(f"/beliefs/{belief_id}/timeline").json()]
+    # Re-ingesting reinforces rather than duplicates, and the timeline says so.
+    assert causes == ["created", "merged"]
+    assert client.get("/beliefs/ghost/timeline").status_code == 404
+
+
+def test_superseding_takes_a_belief_out_of_recall(client):
+    old = client.post("/ingest", json={"text": "The rate is 4 percent."}).json()[0]
+    new = client.post("/ingest", json={"text": "The rate is 5 percent."}).json()[0]
+    retired = client.post(f"/beliefs/{old['id']}/supersede", params={"replaced_by": new["id"]})
+    assert retired.json()["superseded_by"] == new["id"]
+
+    found = [
+        b["id"] for b in client.post("/context", json={"query": "rate percent"}).json()["beliefs"]
+    ]
+    assert new["id"] in found
+    assert old["id"] not in found
+    # Retired, not deleted: the timeline is why the replacement is trusted.
+    assert client.get(f"/beliefs/{old['id']}/timeline").json()[-1]["cause"] == "superseded"
+
+
 def test_a_broken_connector_disables_ask_but_boots_the_server(monkeypatch):
     """An optional feature failing must not take the whole service down."""
 

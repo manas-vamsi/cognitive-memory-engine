@@ -17,7 +17,7 @@ from cme_python.cme import CME, GroundedContext
 from cme_python.config import settings
 from cme_python.engines.evidence import GroundingReport, Justification
 from cme_python.engines.memory import DEFAULT_HALF_LIFE_DAYS, MemoryStats
-from cme_python.models import Belief, MemoryTier, SourceKind
+from cme_python.models import Belief, MemoryTier, Revision, SourceKind
 
 engine: CME | None = None
 chat: GroundedClient | None = None
@@ -177,6 +177,24 @@ def explain(belief_id: str) -> Justification:
     if justification is None:
         raise HTTPException(404, f"No belief {belief_id}")
     return justification
+
+
+@app.get("/beliefs/{belief_id}/timeline", response_model=list[Revision])
+def timeline(belief_id: str) -> list[Revision]:
+    """How a belief's confidence got to where it is: every change, in order."""
+    history = get_engine().timeline(belief_id)
+    if not history:
+        raise HTTPException(404, f"No belief {belief_id}")
+    return history
+
+
+@app.post("/beliefs/{belief_id}/supersede", response_model=Belief)
+def supersede(belief_id: str, replaced_by: str) -> Belief:
+    """Retire a belief in favour of one that replaces it. It leaves recall."""
+    retired = get_engine().supersede(belief_id, replaced_by)
+    if retired is None:
+        raise HTTPException(404, f"No belief {belief_id} or {replaced_by}")
+    return retired
 
 
 @app.get("/contradictions", response_model=list[ContradictionOut])
