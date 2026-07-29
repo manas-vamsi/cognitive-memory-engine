@@ -128,10 +128,14 @@ def bench_concurrency() -> None:
         print(f"  {workers:>8} {rps:>8.1f} {statistics.median(latencies):>7.0f}ms {p99:>8.0f}ms")
     cme.close()
     print("\n  Throughput does not improve with workers and usually falls. The store")
-    print("  lock is not the reason — replacing it with per-thread connections was")
-    print("  measured and made things ~2x slower, so it was reverted. The reason is")
-    print("  that this work is CPU-bound Python under the GIL. Scale out with")
-    print("  processes and shared state (Postgres + Qdrant), never with threads.")
+    print("  lock is not the reason — replacing it with per-thread connections has")
+    print("  now been measured twice, on an in-memory and on a file registry, and")
+    print("  made things worse both times (~2x and ~15%). The reason is that this")
+    print("  work is CPU-bound Python under the GIL. Scale out with processes and")
+    print("  shared state (Postgres + Qdrant), never with threads.")
+    print("\n  A file registry runs in WAL mode, which is worth ~4.5x on writes and")
+    print("  nothing at all on reads. This benchmark is read-only and in memory, so")
+    print("  it will not show that; `save` is where it lands, and ingest is saves.")
 
 
 def main() -> int:

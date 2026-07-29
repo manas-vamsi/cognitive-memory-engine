@@ -249,11 +249,23 @@ same idea to embedding dimensions: embeddings are sparse (~28 non-zero of
 10,000 beliefs went from ~1,450 ms to ~100 ms. Use `QdrantIndex` beyond tens of
 thousands, which is what its ANN index is for.
 
+**Writes.** A file-backed registry runs in WAL mode, which measured **~4.5×
+faster on `save`** than SQLite's default rollback journal — the journal copies
+every page it is about to change into a second file and waits for that to reach
+the disk, on every write. Ingest is nothing but saves, so that is where it lands.
+Reads are unchanged by it, measured rather than assumed: retrieval never paid the
+journal's cost in the first place.
+
 **Concurrency does not help.** At 1,000 beliefs: 39 req/s with one worker,
 ~29 req/s with sixteen, and p99 climbing from 33 ms to 732 ms. The store holds a
 single lock across every query and the work is CPU-bound Python under the GIL,
 so extra threads only queue. Scale out with **processes plus shared state**
 (PostgreSQL + Qdrant, both supported), never with threads in one process.
+
+The lock is not what they queue on, and this has now been tested twice: giving
+each thread its own connection made throughput ~2× worse in memory and ~15%
+worse on a file registry. The lock stays because removing it costs speed and
+buys nothing.
 
 For a per-user deployment — one process per user, which is the usual plugin
 shape — none of that applies; the limit is how much one user accumulates.

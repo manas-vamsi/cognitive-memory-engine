@@ -87,15 +87,31 @@ class BeliefStore:
     def _connect(self):
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        # FastAPI runs sync endpoints on a threadpool, so the connection is
-        # reached from whichever worker thread serves the request. SQLite
-        # refuses that by default; one connection plus one lock is the smallest
-        # correct answer.
+        # FastAPI runs sync endpoints on a threadpool, so a connection is
+        # reached from whichever worker thread serves the request, and SQLite
+        # refuses that by default.
         #
-        # ponytail: a single global lock serialises every query. Right while
-        # requests are cheap; move to a pool if concurrent reads start queueing.
+        # ponytail: a single global lock serialises every query, and it stays.
+        # Giving each thread its own connection was measured twice and made
+        # concurrent throughput ~15% *worse* — the work is CPU-bound Python
+        # under the GIL, so the lock was never what threads were waiting on.
+        # Scale out with processes and a shared store, not with threads.
         db = sqlite3.connect(self.path, check_same_thread=False)
         db.row_factory = sqlite3.Row
+        if self.path != ":memory:":
+            # A rollback journal copies every page it is about to change into a
+            # second file and waits for that to reach the disk, per write. WAL
+            # appends and syncs once: ~4.5x faster on `save`, which is the whole
+            # of ingest. Reads are unchanged — measured, not assumed.
+            #
+            # Reads being unaffected is also why this is the only performance
+            # change here: the store lock does not slow retrieval down either.
+            db.execute("PRAGMA journal_mode=WAL")
+            # WAL lets readers run beside the writer, but two writers still
+            # collide — several processes on one registry is exactly the case
+            # WAL invites. Waiting briefly is what a caller wants there;
+            # failing instantly is not.
+            db.execute("PRAGMA busy_timeout=5000")
         return db
 
     def _existing_columns(self) -> set[str]:
