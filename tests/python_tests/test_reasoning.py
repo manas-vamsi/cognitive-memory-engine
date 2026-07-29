@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import pytest
 
 from cme_python.engines.reasoning import ReasoningEngine, contradicts
-from cme_python.models import Belief, Evidence
+from cme_python.models import Belief, Change, Evidence
 from cme_python.store import BeliefStore
 
 HAS_GC = "Rust has a garbage collector."
@@ -53,6 +53,16 @@ def setup():
         no.add_evidence(Evidence(snippet="The Rust Book, ownership chapter", strength=0.9))
         store.save_all([qubits, superpos, yes, no])
         yield ReasoningEngine(store), qubits, superpos, yes, no
+
+
+@pytest.fixture
+def store_with_close_clash():
+    """A contradiction where neither side is better evidenced than the other."""
+    with BeliefStore() as store:
+        weaker = Belief(statement=HAS_GC, confidence=0.60)
+        stronger = Belief(statement=NO_GC, confidence=0.64)
+        store.save_all([weaker, stronger])
+        yield ReasoningEngine(store), weaker, stronger
 
 
 def test_connect_returns_the_chain_through_the_shared_concept(setup):
@@ -102,6 +112,79 @@ def test_nothing_is_deleted_when_a_contradiction_is_resolved(setup):
     engine, *_ = setup
     engine.resolve(engine.contradictions()[0])
     assert len(engine.store) == 4
+
+
+def test_resolving_writes_the_reason_into_the_timeline(setup):
+    """A confidence that moved with no record of why is a number nobody can audit."""
+    engine, _, _, yes, no = setup
+    weakened = engine.resolve(engine.contradictions()[0])
+    assert weakened.history[-1].cause == Change.CONTRADICTED
+    assert weakened.history[-1].note == no.id
+
+
+# --- reconciliation ----------------------------------------------------------
+
+
+def test_reconcile_retires_the_decisively_beaten_side(setup):
+    """One side has a source and the other has nothing. That is not a close call."""
+    engine, _, _, yes, no = setup
+    done = engine.reconcile()
+    assert len(done) == 1
+    assert done[0].retired is True
+    assert done[0].winner == no.id and done[0].loser == yes.id
+
+    assert engine.store.get(yes.id).superseded_by == no.id
+    assert [b.id for b in engine.store.all()] != []  # the winner is still there
+    assert yes.id not in [b.id for b in engine.store.all()]
+
+
+def test_reconcile_only_weakens_a_close_call(store_with_close_clash):
+    """A narrow margin is a reason to trust a claim less, not to retire it."""
+    engine, weaker, stronger = store_with_close_clash
+    done = engine.reconcile()
+    assert len(done) == 1
+    assert done[0].retired is False
+    assert done[0].margin < 0.35
+
+    survivor = engine.store.get(weaker.id)
+    assert survivor.superseded_by is None  # still in play
+    assert survivor.confidence < weaker.confidence  # but trusted less
+    assert survivor.history[-1].cause == Change.CONTRADICTED
+
+
+def test_reconcile_will_not_break_a_dead_heat():
+    """Equal backing gives no reason to prefer either side; a coin toss is not inference."""
+    with BeliefStore() as store:
+        a = Belief(statement=HAS_GC, confidence=0.7)
+        b = Belief(statement=NO_GC, confidence=0.7)
+        store.save_all([a, b])
+        engine = ReasoningEngine(store)
+
+        assert engine.reconcile() == []
+        assert len(engine.contradictions()) == 1  # still flagged for a human
+        assert store.get(a.id).confidence == 0.7
+        assert store.get(b.id).confidence == 0.7
+
+
+def test_reconcile_leaves_a_consistent_registry_alone(setup):
+    engine, *_ = setup
+    engine.reconcile()
+    assert engine.reconcile() == []
+
+
+def test_reconcile_never_deletes(setup):
+    """Retired is not deleted: the timeline is why the survivor is trusted."""
+    engine, *_ = setup
+    engine.reconcile()
+    assert len(engine.store) == 4
+
+
+def test_propagation_records_why_a_neighbour_moved(setup):
+    engine, qubits, superpos, *_ = setup
+    engine.propagate(qubits.id, -0.2)
+    moved = engine.store.get(superpos.id)
+    assert moved.history[-1].cause == Change.PROPAGATED
+    assert qubits.id in moved.history[-1].note
 
 
 def test_propagation_moves_neighbours_less_than_the_source(setup):

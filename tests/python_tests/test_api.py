@@ -195,6 +195,30 @@ def test_superseding_takes_a_belief_out_of_recall(client):
     assert client.get(f"/beliefs/{old['id']}/timeline").json()[-1]["cause"] == "superseded"
 
 
+def test_reconcile_leaves_a_dead_heat_for_a_human(client):
+    """One document each is the common case, and it favours neither side."""
+    client.post("/ingest", json={"text": "Rust has a garbage collector."})
+    client.post("/ingest", json={"text": "Rust has no garbage collector."})
+    assert len(client.get("/contradictions").json()) == 1
+
+    assert client.post("/contradictions/reconcile").json() == []
+    assert len(client.get("/contradictions").json()) == 1  # still flagged, untouched
+
+
+def test_reconcile_endpoint_acts_on_what_contradictions_only_reports(client):
+    client.post("/ingest", json={"text": "Rust has a garbage collector."})
+    for locator in ("rust-lang.org", "the Rust Book", "the ownership RFC"):
+        client.post("/ingest", json={"text": "Rust has no garbage collector.", "locator": locator})
+    assert len(client.get("/contradictions").json()) == 1
+
+    done = client.post("/contradictions/reconcile").json()
+    assert len(done) == 1
+    assert done[0]["retired"] is True
+    assert client.get("/contradictions").json() == []  # the registry is consistent now
+    # The retired claim is out of recall, and says why in its own timeline.
+    assert client.get(f"/beliefs/{done[0]['loser']}/timeline").json()[-1]["cause"] == "superseded"
+
+
 def test_a_broken_connector_disables_ask_but_boots_the_server(monkeypatch):
     """An optional feature failing must not take the whole service down."""
 
