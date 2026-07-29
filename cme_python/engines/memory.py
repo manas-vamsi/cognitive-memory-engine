@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
-from cme_python.models import DEAD_BELOW, Belief, MemoryTier
+from cme_python.models import DEAD_BELOW, Belief, Change, MemoryTier, Revision
 from cme_python.store import BeliefStore
 
 DEFAULT_HALF_LIFE_DAYS = 180.0
@@ -103,10 +103,27 @@ class MemoryEngine:
 
         Returns the number of beliefs removed.
         """
-        doomed = self.store.all(tier=tier, scope=scope)
+        # Retired beliefs included: someone exercising deletion means all of it.
+        doomed = self.store.all(tier=tier, scope=scope, include_retired=True)
         for belief in doomed:
             self.store.delete(belief.id)
         return len(doomed)
+
+    def supersede(self, old_id: str, new_id: str) -> Belief | None:
+        """Retire one belief in favour of another. Returns the retired belief.
+
+        The replacement is not touched: it stands on its own evidence, and the
+        back-link is enough to find it from the belief it replaced.
+        """
+        old, new = self.store.get(old_id), self.store.get(new_id)
+        if old is None or new is None:
+            return None
+        return self.store.save(old.supersede(new))
+
+    def timeline(self, belief_id: str) -> list[Revision]:
+        """How a belief's confidence got to where it is, oldest first."""
+        belief = self.store.get(belief_id)
+        return belief.history if belief else []
 
     def prune(self, threshold: float = DEAD_BELOW) -> int:
         """Clear out beliefs that have been disproven into irrelevance."""
@@ -156,7 +173,7 @@ class MemoryEngine:
             if decayed >= belief.confidence:
                 continue
             belief.confidence = decayed
-            belief.confidence_at = moment
+            belief.record(Change.DECAYED, at=moment)
             self.store.save(belief)
             moved[belief.id] = decayed
         return moved

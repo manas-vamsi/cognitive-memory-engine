@@ -11,7 +11,7 @@ import pytest
 
 from cme_python.cme import CME
 from cme_python.engines.memory import DECAY_FLOOR, MemoryEngine
-from cme_python.models import Belief, Evidence, MemoryTier
+from cme_python.models import Belief, Change, Evidence, MemoryTier
 from cme_python.store import BeliefStore
 
 ALICE = "Alice is allergic to penicillin."
@@ -167,6 +167,56 @@ def test_decayed_confidence_reaches_retrieval(memory):
     after = engine.retrieve("entanglement qubits")[0][1]
     assert after < before
     assert memory.store.get(old.id).confidence < 0.8
+
+
+# --- supersession and the timeline ------------------------------------------
+
+
+def test_a_superseded_belief_leaves_recall_but_not_the_registry(memory):
+    old, new = memory.remember(
+        [Belief(statement="The rate is 4%."), Belief(statement="The rate is 5%.")],
+        tier=MemoryTier.PROJECT,
+    )
+    memory.supersede(old.id, new.id)
+    assert [b.statement for b in memory.recall(tier=MemoryTier.PROJECT)] == ["The rate is 5%."]
+    assert memory.store.get(old.id).superseded_by == new.id
+
+
+def test_deleting_a_tier_takes_the_retired_beliefs_too(memory):
+    """Someone exercising deletion means all of it, retired or not."""
+    old, new = memory.remember(
+        [Belief(statement="Old rate."), Belief(statement="New rate.")],
+        tier=MemoryTier.PROJECT,
+        scope="rates",
+    )
+    memory.supersede(old.id, new.id)
+    assert memory.forget(tier=MemoryTier.PROJECT, scope="rates") == 2
+    assert memory.store.get(old.id) is None
+
+
+def test_a_retired_belief_stops_ageing(memory):
+    """Decay ranks what is still in play; a retired belief is not."""
+    old, new = memory.remember([_aged("Old rate.", 365), Belief(statement="New rate.")])
+    memory.supersede(old.id, new.id)
+    assert old.id not in memory.decay(half_life_days=180)
+
+
+def test_the_timeline_survives_a_round_trip(memory):
+    """History rides in the stored row, so it must come back with the belief."""
+    belief = memory.remember([_aged("Nobody has checked this.", 180)])[0]
+    memory.decay(half_life_days=180)
+    causes = [r.cause for r in memory.timeline(belief.id)]
+    assert causes == [Change.CREATED, Change.DECAYED]
+
+
+def test_the_timeline_of_an_unknown_belief_is_empty(memory):
+    assert memory.timeline("nope") == []
+
+
+def test_superseding_something_that_is_not_there_changes_nothing(memory):
+    real = memory.remember([Belief(statement="Real.")])[0]
+    assert memory.supersede(real.id, "nope") is None
+    assert memory.store.get(real.id).superseded_by is None
 
 
 def test_prune_removes_disproven_beliefs(memory):

@@ -23,7 +23,7 @@ from cme_python.engines.optimization import OptimizationEngine
 from cme_python.engines.quantum_layer import get_solver
 from cme_python.engines.reasoning import Contradiction, ReasoningEngine
 from cme_python.engines.vectors import VectorRetriever, cache_path_for
-from cme_python.models import Belief, MemoryTier, SourceKind
+from cme_python.models import Belief, MemoryTier, Revision, SourceKind
 from cme_python.store import open_store
 
 
@@ -166,6 +166,18 @@ class CME:
     def explain(self, belief_id: str) -> Justification | None:
         belief = self.store.get(belief_id)
         return self.evidence.justify(belief) if belief else None
+
+    def timeline(self, belief_id: str) -> list[Revision]:
+        """Every change to a belief's confidence, oldest first.
+
+        The answer to "has this been checked lately, or has it just been sitting
+        there?" — which a bare confidence score cannot tell you.
+        """
+        return self.memory.timeline(belief_id)
+
+    def supersede(self, old_id: str, new_id: str) -> Belief | None:
+        """Retire a belief in favour of a better-sourced one that replaces it."""
+        return self.memory.supersede(old_id, new_id)
 
     def contradictions(self) -> list[Contradiction]:
         return self.reasoning.contradictions()
