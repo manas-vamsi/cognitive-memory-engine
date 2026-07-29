@@ -18,7 +18,7 @@ from cme_python.config import settings
 from cme_python.engines.belief import BeliefEngine
 from cme_python.engines.evidence import EvidenceEngine, GroundingReport, Justification
 from cme_python.engines.graph import KnowledgeGraph
-from cme_python.engines.memory import MemoryEngine, MemoryStats
+from cme_python.engines.memory import DEFAULT_HALF_LIFE_DAYS, MemoryEngine, MemoryStats
 from cme_python.engines.optimization import OptimizationEngine
 from cme_python.engines.quantum_layer import get_solver
 from cme_python.engines.reasoning import Contradiction, ReasoningEngine
@@ -151,6 +151,15 @@ class CME:
 
     def stats(self) -> MemoryStats:
         return self.memory.stats()
+
+    def decay(self, *, half_life_days: float = DEFAULT_HALF_LIFE_DAYS) -> int:
+        """Age beliefs nothing has reinforced. Returns how many moved.
+
+        Run it on a schedule if you want one; nothing runs it for you. The
+        facade returns a count rather than the confidences because the caller
+        that wants the detail already has `cme.memory.decay()`.
+        """
+        return len(self.memory.decay(half_life_days=half_life_days))
 
     # --- inspection --------------------------------------------------------
 

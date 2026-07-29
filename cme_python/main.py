@@ -16,7 +16,7 @@ from cme_python.clients.base import GroundedAnswer, GroundedClient, build_client
 from cme_python.cme import CME, GroundedContext
 from cme_python.config import settings
 from cme_python.engines.evidence import GroundingReport, Justification
-from cme_python.engines.memory import MemoryStats
+from cme_python.engines.memory import DEFAULT_HALF_LIFE_DAYS, MemoryStats
 from cme_python.models import Belief, MemoryTier, SourceKind
 
 engine: CME | None = None
@@ -156,6 +156,12 @@ def ask(request: AskRequest) -> GroundedAnswer:
 def split() -> list[Belief]:
     """Break multi-claim beliefs apart so each can be judged on its own."""
     return get_engine().beliefs.split_all()
+
+
+@app.post("/decay")
+def decay(half_life_days: float = DEFAULT_HALF_LIFE_DAYS) -> dict[str, int]:
+    """Age beliefs nothing has reinforced. Returns how many moved."""
+    return {"decayed": get_engine().decay(half_life_days=half_life_days)}
 
 
 @app.get("/memory", response_model=MemoryStats)

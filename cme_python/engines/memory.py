@@ -12,11 +12,28 @@ convention is not a universal fact.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
 from cme_python.models import DEAD_BELOW, Belief, MemoryTier
 from cme_python.store import BeliefStore
+
+DEFAULT_HALF_LIFE_DAYS = 180.0
+"""Six months to halve an untouched belief.
+
+Long on purpose. Memory that fades in weeks is not memory, and the point of
+this engine is accumulation; the aim is only that a note nobody has revisited
+in years stops outranking last week's.
+"""
+
+DECAY_FLOOR = 0.05
+"""Age alone can never push a belief below this.
+
+Falling to zero would let time delete a belief through `prune`, and "nobody
+mentioned it lately" is not evidence of falsity. Disproving is what evidence is
+for.
+"""
 
 
 class MemoryStats(BaseModel):
@@ -94,6 +111,55 @@ class MemoryEngine:
     def prune(self, threshold: float = DEAD_BELOW) -> int:
         """Clear out beliefs that have been disproven into irrelevance."""
         return self.store.prune_dead(threshold)
+
+    def decay(
+        self,
+        *,
+        half_life_days: float = DEFAULT_HALF_LIFE_DAYS,
+        now: datetime | None = None,
+        tier: MemoryTier | None = None,
+        scope: str | None = None,
+        floor: float = DECAY_FLOOR,
+    ) -> dict[str, float]:
+        """Age unreinforced beliefs, halving confidence every `half_life_days`.
+
+        **Opt-in.** Nothing calls this on your behalf, because quietly weakening
+        somebody's memories is not a sensible default — a fact recorded once and
+        never mentioned again may be no less true.
+
+        It exists because a registry only grows. Retrieval cost scales with
+        size, and a year-old registry of notes nobody has touched since is both
+        slower and less useful than the recent slice. Decay gives `prune` a
+        principled way to identify what has fallen out of use, rather than
+        deleting by age directly — which would throw away a belief that is
+        simply settled.
+
+        Each run ages only the span since the last one, and stamps
+        `confidence_at` as it goes. Halving is memoryless — two runs over
+        consecutive spans land exactly where one run over the whole span would —
+        so calling this hourly and calling it yearly agree, and evidence resets
+        the clock by stamping the same field.
+
+        Confidence never falls below `floor` from age alone: only contradicting
+        *evidence* should be able to disprove a belief, and that path is
+        `add_evidence`. Age makes a belief quieter, not wrong.
+
+        Returns the beliefs that moved, mapped to their new confidence.
+        """
+        moment = now or datetime.now(UTC)
+        moved: dict[str, float] = {}
+        for belief in self.store.all(tier=tier, scope=scope):
+            days = (moment - belief.confidence_at).total_seconds() / 86_400
+            if days <= 0:
+                continue
+            decayed = max(round(belief.confidence * 0.5 ** (days / half_life_days), 6), floor)
+            if decayed >= belief.confidence:
+                continue
+            belief.confidence = decayed
+            belief.confidence_at = moment
+            self.store.save(belief)
+            moved[belief.id] = decayed
+        return moved
 
     def stats(self) -> MemoryStats:
         return MemoryStats(total=len(self.store), by_tier=self.store.count_by_tier())
