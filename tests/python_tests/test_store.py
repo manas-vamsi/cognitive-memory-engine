@@ -142,6 +142,34 @@ def test_usable_from_more_than_one_thread(store):
     assert len(store) == 8
 
 
+def test_save_all_writes_every_belief(store):
+    beliefs = [Belief(statement=f"Batched claim number {i}.") for i in range(5)]
+    assert store.save_all(beliefs) == 5
+    assert len(store) == 5
+    assert all(store.get(b.id) is not None for b in beliefs)
+    assert all(store.get(b.id).updated_at is not None for b in beliefs)
+
+
+def test_save_all_of_nothing_is_not_an_error(store):
+    assert store.save_all([]) == 0
+
+
+def test_save_all_is_all_or_nothing(store, monkeypatch):
+    """A document half-ingested leaves a registry nobody can reason about."""
+    beliefs = [Belief(statement=f"Claim number {i} of a document.") for i in range(4)]
+    original = store._row
+
+    def explode(belief):
+        if belief is beliefs[-1]:
+            raise ValueError("this belief cannot be written")
+        return original(belief)
+
+    monkeypatch.setattr(store, "_row", explode)
+    with pytest.raises(ValueError):
+        store.save_all(beliefs)
+    assert len(store) == 0  # not three of the four
+
+
 def test_a_file_registry_runs_in_wal_mode(tmp_path):
     """Writes are ~4.5x cheaper under WAL, and ingest is nothing but writes."""
     with BeliefStore(tmp_path / "cme.sqlite") as s:

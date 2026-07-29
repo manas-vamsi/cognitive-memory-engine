@@ -251,9 +251,9 @@ class BeliefEngine:
                 filed[key] = fresh
             else:
                 filed[key] = target.merge(fresh)
-        for b in filed.values():
-            self.store.save(b)
-        return list(filed.values())
+        beliefs = list(filed.values())
+        self.store.save_all(beliefs)
+        return beliefs
 
     def split(self, belief: Belief) -> list[Belief]:
         """Break a multi-claim belief into one belief per claim, in the registry.
@@ -266,8 +266,7 @@ class BeliefEngine:
         if not claims:
             return [belief]
         parts = belief.split(*claims)
-        for part in parts:
-            self.store.save(part)
+        self.store.save_all(parts)
         self.store.delete(belief.id)
         return parts
 

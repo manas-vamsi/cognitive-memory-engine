@@ -273,9 +273,16 @@ returned, on a corpus with 1,312 real clashes:
 **Writes.** A file-backed registry runs in WAL mode, which measured **~4.5×
 faster on `save`** than SQLite's default rollback journal — the journal copies
 every page it is about to change into a second file and waits for that to reach
-the disk, on every write. Ingest is nothing but saves, so that is where it lands.
-Reads are unchanged by it, measured rather than assumed: retrieval never paid the
-journal's cost in the first place.
+the disk, on every write. Reads are unchanged by it, measured rather than
+assumed: retrieval never paid the journal's cost in the first place.
+
+`save_all` then commits a whole batch in one transaction rather than looping
+over `save`. A transaction ends in a disk sync, and a sync costs about the same
+for one row as for a thousand, so filing a document's beliefs one at a time paid
+that price per belief: **1,000 beliefs went from 1,898 ms to 16 ms**, and real
+`ingest()` from 228 ms to 27 ms (~8×). It is also all-or-nothing, which is the
+more correct behaviour — a document half-filed because the process died between
+two of its claims leaves a registry nobody can reason about.
 
 **Concurrency does not help.** At 1,000 beliefs: 39 req/s with one worker,
 ~29 req/s with sixteen, and p99 climbing from 33 ms to 732 ms. The store holds a
