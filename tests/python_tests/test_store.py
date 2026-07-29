@@ -142,6 +142,22 @@ def test_usable_from_more_than_one_thread(store):
     assert len(store) == 8
 
 
+def test_pruning_spares_a_retired_belief_however_weak(store):
+    """Retired is not deleted. The timeline is why the replacement is trusted.
+
+    A belief already at low confidence when something replaced it would
+    otherwise be swept up by the next prune, turning "overtaken" into "never
+    happened" — and `maintain()` prunes on a schedule, so it would happen quietly.
+    """
+    weak = Belief(statement="Weak, and then overtaken.", confidence=0.01)
+    better = Belief(statement="The better sourced replacement.", confidence=0.9)
+    store.save_all([weak, better])
+    store.save(weak.supersede(better))
+
+    assert store.prune_dead(DEAD_BELOW) == 0
+    assert store.get(weak.id).superseded_by == better.id
+
+
 def test_save_all_writes_every_belief(store):
     beliefs = [Belief(statement=f"Batched claim number {i}.") for i in range(5)]
     assert store.save_all(beliefs) == 5

@@ -307,8 +307,18 @@ class BeliefStore:
         return [Belief.model_validate_json(r["data"]) for r in rows]
 
     def prune_dead(self, threshold: float) -> int:
-        """Drop disproven beliefs out of the registry. Returns rows removed."""
-        return self._exec("DELETE FROM beliefs WHERE confidence <= ?", (threshold,))
+        """Drop disproven beliefs out of the registry. Returns rows removed.
+
+        A superseded belief is spared whatever its confidence. It was retired
+        because something better replaced it, and its timeline is the reason the
+        replacement is trusted — deleting it would quietly turn "overtaken" into
+        "never happened". Low confidence is why a belief lost, not grounds to
+        erase the record of its losing.
+        """
+        return self._exec(
+            "DELETE FROM beliefs WHERE confidence <= ? AND superseded_by IS NULL",
+            (threshold,),
+        )
 
     def __len__(self) -> int:
         return self._read("SELECT COUNT(*) AS n FROM beliefs")[0]["n"]
