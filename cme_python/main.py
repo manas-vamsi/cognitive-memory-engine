@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from cme_python.clients.base import GroundedAnswer, GroundedClient, build_client
-from cme_python.cme import CME, GroundedContext
+from cme_python.cme import CME, GroundedContext, Maintenance
 from cme_python.config import settings
 from cme_python.engines.evidence import GroundingReport, Justification
 from cme_python.engines.memory import DEFAULT_HALF_LIFE_DAYS, MemoryStats
@@ -163,6 +163,15 @@ def split() -> list[Belief]:
 def decay(half_life_days: float = DEFAULT_HALF_LIFE_DAYS) -> dict[str, int]:
     """Age beliefs nothing has reinforced. Returns how many moved."""
     return {"decayed": get_engine().decay(half_life_days=half_life_days)}
+
+
+@app.post("/maintain", response_model=Maintenance)
+def maintain(half_life_days: float = DEFAULT_HALF_LIFE_DAYS, prune: bool = True) -> Maintenance:
+    """One upkeep pass: age, reconcile, then clear out the disproven.
+
+    The endpoint to put on a schedule. Nothing calls it for you.
+    """
+    return get_engine().maintain(half_life_days=half_life_days, prune=prune)
 
 
 @app.get("/memory", response_model=MemoryStats)

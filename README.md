@@ -88,6 +88,23 @@ The atomic unit of cognition — a structured object, not a slice of text:
   Distinct from being disproven, and distinct from a merge — averaging "the rate
   is 4%" with "the rate is 5%" invents a number nobody ever claimed.
 
+### Upkeep
+
+Ageing, reconciling and pruning are each opt-in, which left nothing to put on a
+schedule. `maintain()` is that one thing:
+
+```python
+done = cme.maintain()  # or POST /maintain, nightly
+# Maintenance(decayed=14, weakened=2, retired=1, pruned=3)
+```
+
+The order is the argument. Ageing runs first so contradictions are judged on
+current confidences, not stale ones — a claim nobody has backed in a year should
+not outrank a fresh one purely for having been written first. Pruning runs last
+so anything the first two steps disproved leaves in the same pass. Ageing alone
+can never cause a deletion: decay stops at a floor well above the pruning
+threshold, so only contradicting evidence can push a belief that far down.
+
 ### Time-aware belief evolution
 
 Most memory systems store what is currently believed. CME stores **how the
@@ -524,6 +541,7 @@ uvicorn cme_python.main:app --reload
 | `POST /contradictions/reconcile` | Act on them: retire the decisively beaten, weaken the rest. |
 | `POST /split` | Break multi-claim beliefs apart so each can be judged alone. |
 | `POST /decay` | Age beliefs nothing has reinforced. Opt-in; nothing runs it for you. |
+| `POST /maintain` | One upkeep pass: age, reconcile, prune. The thing to put on a schedule. |
 | `GET /health` | Registry size, active solver, whether `/ask` is enabled. |
 
 ### Registry: SQLite or PostgreSQL

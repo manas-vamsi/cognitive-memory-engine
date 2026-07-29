@@ -49,6 +49,23 @@ class GroundedContext(BaseModel):
         return "\n".join(lines)
 
 
+class Maintenance(BaseModel):
+    """What one maintenance pass did to the registry."""
+
+    decayed: int
+    """Beliefs that faded for want of reinforcement."""
+    weakened: int
+    """Beliefs a better-backed contradiction pushed down."""
+    retired: int
+    """Beliefs superseded outright. Out of recall, still on record."""
+    pruned: int
+    """Beliefs deleted for being disproven into irrelevance."""
+
+    @property
+    def changed(self) -> int:
+        return self.decayed + self.weakened + self.retired + self.pruned
+
+
 class CME:
     """A persistent brain for a reasoning client."""
 
@@ -160,6 +177,38 @@ class CME:
         that wants the detail already has `cme.memory.decay()`.
         """
         return len(self.memory.decay(half_life_days=half_life_days))
+
+    def maintain(
+        self,
+        *,
+        half_life_days: float = DEFAULT_HALF_LIFE_DAYS,
+        prune: bool = True,
+    ) -> Maintenance:
+        """One upkeep pass: age, reconcile, then clear out the disproven.
+
+        The three background operations are individually opt-in, which left a
+        deployment with no single thing to put on a schedule. This is that
+        thing. Run it nightly, or never — nothing runs it for you, because
+        rewriting somebody's memory unasked is not a default.
+
+        The order is the argument. Ageing first means contradictions are judged
+        on current confidences rather than stale ones, so a claim nobody has
+        backed in a year no longer outranks a fresh one purely for having been
+        written first. Pruning last means anything the first two steps
+        disproved leaves in the same pass instead of lingering until the next.
+
+        Note that ageing cannot itself cause a deletion: decay stops at a floor
+        well above the pruning threshold, so only contradicting evidence can
+        push a belief far enough down to be removed.
+        """
+        decayed = len(self.memory.decay(half_life_days=half_life_days))
+        resolved = self.reasoning.reconcile()
+        return Maintenance(
+            decayed=decayed,
+            weakened=sum(1 for r in resolved if not r.retired),
+            retired=sum(1 for r in resolved if r.retired),
+            pruned=self.memory.prune() if prune else 0,
+        )
 
     # --- inspection --------------------------------------------------------
 

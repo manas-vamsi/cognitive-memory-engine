@@ -219,6 +219,52 @@ def test_reconcile_endpoint_acts_on_what_contradictions_only_reports(client):
     assert client.get(f"/beliefs/{done[0]['loser']}/timeline").json()[-1]["cause"] == "superseded"
 
 
+def test_maintain_does_the_three_upkeep_jobs_in_one_pass(cme):
+    from datetime import UTC, datetime, timedelta
+
+    from cme_python.models import Belief
+
+    stale = Belief(statement="Nobody has mentioned this in a year.", confidence=0.8)
+    stale.confidence_at = datetime.now(UTC) - timedelta(days=365)
+    disproven = Belief(statement="Already disproven.", confidence=0.0)
+    cme.memory.remember([stale, disproven])
+    cme.ingest("Rust has a garbage collector.")
+    for locator in ("rust-lang.org", "the Rust Book", "the ownership RFC"):
+        cme.ingest("Rust has no garbage collector.", locator=locator)
+
+    done = cme.maintain()
+    assert done.decayed >= 1  # the stale belief aged
+    assert done.retired == 1  # the outgunned claim was superseded
+    assert done.pruned == 1  # the disproven one was cleared out
+    assert done.changed == done.decayed + done.weakened + done.retired + done.pruned
+
+    assert cme.maintain().changed == 0  # a second pass has nothing left to do
+
+
+def test_maintain_never_deletes_a_belief_for_being_old(cme):
+    """Decay stops well above the pruning threshold. Silence is not refutation."""
+    from datetime import UTC, datetime, timedelta
+
+    from cme_python.models import Belief
+
+    ancient = Belief(statement="True but unfashionable for a decade.", confidence=0.8)
+    ancient.confidence_at = datetime.now(UTC) - timedelta(days=3650)
+    cme.memory.remember([ancient])
+
+    assert cme.maintain().pruned == 0
+    assert cme.store.get(ancient.id) is not None
+
+
+def test_maintain_endpoint_reports_what_it_changed(client):
+    client.post("/ingest", json={"text": "Rust has a garbage collector."})
+    for locator in ("rust-lang.org", "the Rust Book", "the ownership RFC"):
+        client.post("/ingest", json={"text": "Rust has no garbage collector.", "locator": locator})
+
+    body = client.post("/maintain").json()
+    assert body["retired"] == 1
+    assert client.get("/contradictions").json() == []
+
+
 def test_a_broken_connector_disables_ask_but_boots_the_server(monkeypatch):
     """An optional feature failing must not take the whole service down."""
 
