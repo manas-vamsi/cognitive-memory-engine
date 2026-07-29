@@ -142,6 +142,22 @@ def test_usable_from_more_than_one_thread(store):
     assert len(store) == 8
 
 
+def test_a_file_registry_runs_in_wal_mode(tmp_path):
+    """Writes are ~4.5x cheaper under WAL, and ingest is nothing but writes."""
+    with BeliefStore(tmp_path / "cme.sqlite") as s:
+        assert s._db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        # It sticks to the file, so a second session inherits it.
+        s.save(Belief(statement="Written under WAL."))
+    with BeliefStore(tmp_path / "cme.sqlite") as s:
+        assert s._db.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_an_in_memory_registry_is_left_alone(tmp_path):
+    """WAL needs a file to append to; asking for it in memory silently fails."""
+    with BeliefStore() as s:
+        assert s._db.execute("PRAGMA journal_mode").fetchone()[0] == "memory"
+
+
 def test_survives_reopening_the_file(tmp_path):
     db = tmp_path / "nested" / "cme.sqlite"
     with BeliefStore(db) as s:
