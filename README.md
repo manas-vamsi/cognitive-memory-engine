@@ -75,6 +75,13 @@ The atomic unit of cognition — a structured object, not a slice of text:
   anything nothing has reinforced, six months by default. It stops at a floor,
   because silence is not a refutation — an unfashionable fact still ranks, it
   just stops outranking last week's. Opt-in; nothing calls it for you.
+- **Reconcile** — detection alone leaves the registry knowingly inconsistent:
+  able to say two beliefs cannot both be true, and serving both anyway.
+  `reconcile()` acts on every clash it finds. Where the evidence decisively
+  favours one side the loser is retired; where the sides are close it is only
+  trusted less; where they are backed exactly alike nothing happens at all, and
+  the clash stays flagged for a human — weakening whichever belief happened to
+  sort first would be dressing a coin toss up as inference.
 - **Be superseded** — a repealed rule, a revised figure. `supersede()` retires
   the old claim in favour of the new one: it leaves recall immediately but is
   never deleted, because *why* the replacement is trusted is part of the record.
@@ -114,6 +121,8 @@ checked: decay moves a belief without anyone asking whether it is still true.
 | `merged` | A duplicate was folded in. |
 | `split` | Inherited from a parent belief that carried two claims. |
 | `decayed` | Faded with time; nobody has reinforced it. |
+| `contradicted` | Another belief clashed with it and was better backed. |
+| `propagated` | Moved because something it rests on moved. |
 | `superseded` | Overtaken by a better-sourced claim. |
 
 Timelines ride in the belief's own row, so they survive a restart with no extra
@@ -131,7 +140,7 @@ expensive.
 | **2. Memory Engine** | Multi-tier persistent storage: user, scientific, organizational, and project memory. |
 | **3. Knowledge Graph** | The reasoning substrate — every belief wired into one semantic web (`Quantum Computing → Qubits → Superposition → Entanglement → Quantum Gates → Error Correction`). |
 | **4. Evidence Engine** | Guarantees every retrieved belief is supported. Answers *why? / where from? / how certain?* |
-| **5. Reasoning Engine** | Multi-hop reasoning (A→B→C), contradiction detection, belief propagation — drop A's confidence and dependents adjust automatically. |
+| **5. Reasoning Engine** | Multi-hop reasoning (A→B→C), contradiction detection *and reconciliation*, belief propagation — drop A's confidence and dependents adjust automatically. |
 | **6. Optimization Engine** | Turns memory selection, evidence choice, reasoning-path planning, tool selection, and sparse retrieval into solvable math instead of brute force. |
 | **7. Quantum Optimization Layer** | *Optional* acceleration backend — QUBO, Ising, quantum annealing, QAOA, Grover-inspired search. **Quantum does not replace the LLM**; it only solves the optimization step. |
 
@@ -493,6 +502,7 @@ uvicorn cme_python.main:app --reload
 | `GET /beliefs/{id}/timeline` | How that belief's confidence got where it is: every change, in order. |
 | `POST /beliefs/{id}/supersede` | Retire a belief in favour of one that replaces it. |
 | `GET /contradictions` | Stored beliefs that assert opposite things. |
+| `POST /contradictions/reconcile` | Act on them: retire the decisively beaten, weaken the rest. |
 | `POST /split` | Break multi-claim beliefs apart so each can be judged alone. |
 | `POST /decay` | Age beliefs nothing has reinforced. Opt-in; nothing runs it for you. |
 | `GET /health` | Registry size, active solver, whether `/ask` is enabled. |

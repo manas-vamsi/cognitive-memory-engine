@@ -21,7 +21,7 @@ from cme_python.engines.graph import KnowledgeGraph
 from cme_python.engines.memory import DEFAULT_HALF_LIFE_DAYS, MemoryEngine, MemoryStats
 from cme_python.engines.optimization import OptimizationEngine
 from cme_python.engines.quantum_layer import get_solver
-from cme_python.engines.reasoning import Contradiction, ReasoningEngine
+from cme_python.engines.reasoning import Contradiction, ReasoningEngine, Resolution
 from cme_python.engines.vectors import VectorRetriever, cache_path_for
 from cme_python.models import Belief, MemoryTier, Revision, SourceKind
 from cme_python.store import open_store
@@ -181,3 +181,12 @@ class CME:
 
     def contradictions(self) -> list[Contradiction]:
         return self.reasoning.contradictions()
+
+    def reconcile(self) -> list[Resolution]:
+        """Act on every contradiction: retire the decisively beaten, weaken the rest.
+
+        Detection alone leaves the registry knowingly inconsistent — able to say
+        two beliefs cannot both be true, and serving both regardless. Opt-in,
+        like `decay`: acting on somebody's memory is their call, not ours.
+        """
+        return self.reasoning.reconcile()

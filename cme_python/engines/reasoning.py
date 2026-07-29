@@ -17,7 +17,7 @@ from cme_python.engines.evidence import tokenise
 from cme_python.engines.graph import BELIEF, CONCEPT, KnowledgeGraph, belief_node
 from cme_python.engines.native import graph_class
 from cme_python.engines.optimization import jaccard, stem
-from cme_python.models import Belief
+from cme_python.models import Belief, Change
 from cme_python.store import BeliefStore
 
 _WORDS = re.compile(r"[a-z']+")
@@ -66,6 +66,19 @@ entailment model is the real fix, and this is the knob to retune when one lands.
 DAMPING = 0.5
 """Each hop away from the source, a confidence shift loses half its force."""
 
+DECISIVE_AT = 0.35
+"""Evidence margin above which the losing side is retired, not just weakened.
+
+The margin is in `_weight` units — confidence scaled by the evidence for and
+against — so 0.35 is roughly a confident claim with a source facing an
+unsupported one. Below it the two sides are close enough that retiring either
+would be picking a winner on noise, and the honest act is to trust the weaker
+one less and leave both in play.
+
+Deliberately cautious. A wrongly-retired belief leaves recall and stops arguing
+its own case; a wrongly-kept one merely stays visible at a lower confidence.
+"""
+
 
 class Contradiction(BaseModel):
     """Two beliefs asserting opposite things about the same subject."""
@@ -89,6 +102,18 @@ class Contradiction(BaseModel):
             f'"{self.b.statement}" ({self.b.confidence:.0%}) '
             f"at {self.overlap:.0%} content overlap."
         )
+
+
+class Resolution(BaseModel):
+    """What the engine did about one contradiction, and why."""
+
+    winner: str
+    loser: str
+    retired: bool
+    """True if the loser was superseded; False if it was only weakened."""
+    margin: float
+    """How far the evidence favoured the winner. Below `DECISIVE_AT`, no retirement."""
+    explanation: str
 
 
 class Chain(BaseModel):
@@ -221,8 +246,73 @@ class ReasoningEngine:
         """
         loser = clash.loser
         loser.confidence = _clamp(loser.confidence * (1 - force * clash.overlap))
+        loser.record(Change.CONTRADICTED, clash.winner.id)
         self.store.save(loser)
         return loser
+
+    def reconcile(
+        self,
+        *,
+        threshold: float = CONTRADICTION_AT,
+        force: float = 0.5,
+        decisive: float = DECISIVE_AT,
+    ) -> list[Resolution]:
+        """Work through every contradiction in the registry and act on each.
+
+        Detection on its own leaves the registry knowingly inconsistent: the
+        engine can already say two beliefs cannot both be true and then serves
+        both anyway. This is the other half.
+
+        Two outcomes, because a contradiction is not one situation. Where the
+        evidence decisively favours one side, the loser is *superseded* — it
+        leaves recall and points at what replaced it. Where the sides are close,
+        the loser is only pushed down: a narrow margin is a reason to trust a
+        claim less, not a licence to retire it on a rule of thumb.
+
+        A dead heat is left alone. Two claims backed exactly alike give no
+        reason to prefer either, and `winner` then falls out of tuple order —
+        weakening whichever came first would be dressing a coin toss up as
+        inference. It stays in the registry, contradiction and all, for a human
+        to break. This is common: one document each, both ingested the same way.
+
+        Re-detecting after each act rather than resolving a snapshot, because
+        acting on one clash changes the confidences the next is judged on, and a
+        retired belief should stop appearing in later pairs at all. Pairs already
+        considered are remembered, so an untouched dead heat cannot be picked up
+        forever.
+        """
+        done: list[Resolution] = []
+        seen: set[frozenset[str]] = set()
+        while True:
+            pending = [
+                c
+                for c in self.contradictions(threshold=threshold)
+                if frozenset((c.a.id, c.b.id)) not in seen
+            ]
+            if not pending:
+                break
+            clash = pending[0]
+            seen.add(frozenset((clash.a.id, clash.b.id)))
+
+            margin = _weight(clash.winner) - _weight(clash.loser)
+            if margin <= 0:
+                continue
+            if margin >= decisive:
+                loser = clash.loser.supersede(clash.winner)
+                self.store.save(loser)
+            else:
+                loser = self.resolve(clash, force=force)
+            done.append(
+                Resolution(
+                    winner=clash.winner.id,
+                    loser=loser.id,
+                    retired=loser.superseded_by is not None,
+                    margin=round(margin, 6),
+                    explanation=clash.explain(),
+                )
+            )
+        self._graph_size = -1  # confidences changed; the graph must be rebuilt
+        return done
 
     # --- belief propagation ------------------------------------------------
 
@@ -245,6 +335,7 @@ class ReasoningEngine:
             return {}
 
         source.confidence = _clamp(source.confidence + delta)
+        source.record(Change.PROPAGATED, f"{delta:+.3f} applied directly")
         self.store.save(source)
         moved: dict[str, float] = {source.id: source.confidence}
 
@@ -262,6 +353,7 @@ class ReasoningEngine:
             if abs(shift) < 1e-9:
                 continue
             neighbour.confidence = _clamp(neighbour.confidence + shift)
+            neighbour.record(Change.PROPAGATED, f"{shift:+.3f} from {source.id}, {hops} hop(s)")
             self.store.save(neighbour)
             moved[neighbour.id] = neighbour.confidence
 

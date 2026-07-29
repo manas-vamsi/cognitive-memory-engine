@@ -63,6 +63,8 @@ class Change(StrEnum):
     MERGED = "merged"
     SPLIT = "split"
     DECAYED = "decayed"
+    CONTRADICTED = "contradicted"
+    PROPAGATED = "propagated"
     SUPERSEDED = "superseded"
 
 

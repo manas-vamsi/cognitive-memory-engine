@@ -17,6 +17,7 @@ from cme_python.cme import CME, GroundedContext
 from cme_python.config import settings
 from cme_python.engines.evidence import GroundingReport, Justification
 from cme_python.engines.memory import DEFAULT_HALF_LIFE_DAYS, MemoryStats
+from cme_python.engines.reasoning import Resolution
 from cme_python.models import Belief, MemoryTier, Revision, SourceKind
 
 engine: CME | None = None
@@ -209,3 +210,9 @@ def contradictions() -> list[ContradictionOut]:
         )
         for c in get_engine().contradictions()
     ]
+
+
+@app.post("/contradictions/reconcile", response_model=list[Resolution])
+def reconcile() -> list[Resolution]:
+    """Act on every contradiction: retire the decisively beaten, weaken the rest."""
+    return get_engine().reconcile()
