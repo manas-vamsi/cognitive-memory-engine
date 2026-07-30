@@ -20,6 +20,10 @@ services:
     environment:
       CME_DATABASE: /data/cme.sqlite
       CME_SOLVER: annealing
+      # Throughput comes from processes, not threads. Raise this to the cores
+      # you are willing to give it; point CME_DATABASE at the postgres profile
+      # first if several instances will share one registry.
+      CME_WORKERS: ${CME_WORKERS:-1}
     volumes:
       - cme-data:/data
     healthcheck:

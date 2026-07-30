@@ -331,11 +331,33 @@ what made the old single-threaded number look good, and it deadlocked the moment
 two threads shared it. Connections are autocommit now, which costs a round trip
 per read and buys back correctness.
 
+**Scaling out with processes works**, and this is no longer only an assertion.
+Separate OS processes against one shared registry, each running its own CME:
+
+| processes | req/s | per process |
+|---|---|---|
+| 1 | 9.5 | 9.5 |
+| 2 | 21.5 | 10.7 |
+| 4 | **34.1** | 8.5 |
+
+Near-linear to two, ~3.5× at four on a four-core dev machine where PostgreSQL is
+competing for the same cores. Compare the thread rows above, which go *down*.
+
+```bash
+CME_WORKERS=4 docker compose up            # or --profile postgres, for several instances
+uvicorn cme_python.main:app --workers 4    # the same thing without Docker
+```
+
+Multiple workers are safe on SQLite too, now that the registry runs in WAL mode
+— eight concurrent ingests across four worker processes on one file, none lost.
+PostgreSQL is still the answer when the instances are on different machines.
+
 For a per-user deployment — one process per user, which is the usual plugin
 shape — none of that applies; the limit is how much one user accumulates.
 
 **Treat this as research infrastructure, not a service that will absorb
-traffic.** One instance saturates around 40 req/s.
+traffic.** One worker saturates around 40 req/s, and the way past that is more
+workers, not more threads.
 
 ## Measured, not asserted
 
