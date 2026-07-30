@@ -38,6 +38,16 @@ class Settings:
     retrieval: str = os.environ.get("CME_RETRIEVAL", "lexical")
     """`lexical` (TF-IDF) or `vector` (embedding similarity)."""
 
+    detector: str = os.environ.get("CME_DETECTOR", "lexical")
+    """`lexical` (negation parity) or `nli` (an entailment model).
+
+    Lexical by default because it needs no model, no download and no machine
+    learning runtime, and it catches the clash that matters most: the same claim
+    asserted and denied. `nli` reads meaning instead of form and finds
+    disagreements nobody phrased as a negation, at the cost of `transformers`
+    and `torch`.
+    """
+
     llm: str = os.environ.get("CME_LLM", "")
     """`claude` or `openai` to enable /ask. Empty leaves the endpoint disabled."""
 

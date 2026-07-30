@@ -35,6 +35,34 @@ jobs:
       - name: Test
         run: pytest -q
 
+  entailment:
+    # Against a real NLI model, for the same reason the Qdrant job uses a real
+    # Qdrant. A mocked classifier would have happily confirmed that unrelated
+    # beliefs contradict each other, which is exactly the failure this detector
+    # had and the gate that now prevents it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install transformers
+
+      - name: Test the entailment detector
+        run: |
+          # The model-backed tests skip themselves when the stack is absent, so
+          # prove it is present rather than trusting a green run of nothing.
+          python -c "from importlib.util import find_spec; assert find_spec('torch') and find_spec('transformers')"
+          pytest tests/python_tests/test_entailment.py -q
+
   postgres:
     # The store contract, run against a real PostgreSQL. The same tests cover
     # SQLite, so the two backends cannot drift apart unnoticed.
