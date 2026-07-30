@@ -210,5 +210,65 @@ def test_survives_reopening_the_file(tmp_path):
         assert s.get(bid).statement == "Persisted across sessions."
 
 
+# --- PostgreSQL concurrency --------------------------------------------------
+
+postgres_only = pytest.mark.skipif(not DATABASE_URL, reason="DATABASE_URL not set")
+
+
+@postgres_only
+def test_reading_leaves_no_transaction_open():
+    """A reader holding a transaction open forever is how this used to deadlock.
+
+    psycopg opens a transaction on the first statement and keeps it until
+    something commits, so a thread that only reads sat `idle in transaction`
+    indefinitely — blocking writes, DDL and VACUUM. Connections are autocommit
+    for that reason, not as a preference.
+    """
+    from cme_python.store import open_store
+
+    with open_store(DATABASE_URL) as store, open_store(DATABASE_URL) as observer:
+        store.all(limit=5)
+        states = [
+            row["state"]
+            for row in observer._read(
+                "SELECT state FROM pg_stat_activity WHERE datname = current_database()"
+            )
+        ]
+        assert "idle in transaction" not in states
+
+
+@postgres_only
+def test_each_thread_reads_on_its_own_connection():
+    """Queries are network round trips here, so threads must not queue behind one."""
+    import threading
+
+    from cme_python.store import open_store
+
+    with open_store(DATABASE_URL) as store:
+        store.save(Belief(statement="Something to read back."))
+        seen: list[int] = []
+        errors: list[Exception] = []
+        lock = threading.Lock()
+
+        def work() -> None:
+            try:
+                store.all(limit=5)
+                with lock:
+                    seen.append(id(store._conn()))
+            except Exception as exc:  # noqa: BLE001 - the point is to surface it
+                errors.append(exc)
+
+        threads = [threading.Thread(target=work) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert errors == []
+        assert not any(t.is_alive() for t in threads)  # nothing blocked on a lock
+        assert len(set(seen)) == 4  # four threads, four connections
+        store._exec("DELETE FROM beliefs")
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

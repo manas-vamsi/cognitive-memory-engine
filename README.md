@@ -312,6 +312,25 @@ each thread its own connection made throughput ~2× worse in memory and ~15%
 worse on a file registry. The lock stays because removing it costs speed and
 buys nothing.
 
+**On PostgreSQL, threads do help**, and the difference is instructive. There a
+query is a network round trip and psycopg releases the GIL for its duration, so
+threads genuinely overlap instead of queueing. Each thread gets its own
+connection:
+
+| workers | one shared connection | connection per thread |
+|---|---|---|
+| 1 | 460 req/s | 280 req/s |
+| 4 | 415 req/s | **830 req/s** |
+| 16 | 397 req/s | **707 req/s** |
+
+The single-worker column is not a regression to shrug at, it is the price of a
+bug fix. psycopg opens a transaction on the first statement and holds it until
+something commits, and the old store never committed after a read — so a reader
+sat `idle in transaction` indefinitely, blocking writes, DDL and VACUUM. That is
+what made the old single-threaded number look good, and it deadlocked the moment
+two threads shared it. Connections are autocommit now, which costs a round trip
+per read and buys back correctness.
+
 For a per-user deployment — one process per user, which is the usual plugin
 shape — none of that applies; the limit is how much one user accumulates.
 
