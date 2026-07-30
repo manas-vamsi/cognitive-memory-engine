@@ -13,6 +13,7 @@ from collections import defaultdict
 from pydantic import BaseModel
 
 from cme_python.config import settings
+from cme_python.engines.entailment import Detector
 from cme_python.engines.evidence import tokenise
 from cme_python.engines.graph import BELIEF, CONCEPT, KnowledgeGraph, belief_node
 from cme_python.engines.native import graph_class
@@ -86,6 +87,13 @@ class Contradiction(BaseModel):
     a: Belief
     b: Belief
     overlap: float
+    """How strongly they clash, 0..1.
+
+    Content overlap from the lexical detector, contradiction probability from
+    the entailment one. The name predates the second and stays because it is
+    part of the HTTP response; `explain()` says "scored" rather than naming a
+    measure that is only true of one detector.
+    """
 
     @property
     def winner(self) -> Belief:
@@ -99,8 +107,8 @@ class Contradiction(BaseModel):
     def explain(self) -> str:
         return (
             f'"{self.a.statement}" ({self.a.confidence:.0%}) contradicts '
-            f'"{self.b.statement}" ({self.b.confidence:.0%}) '
-            f"at {self.overlap:.0%} content overlap."
+            f'"{self.b.statement}" ({self.b.confidence:.0%}), '
+            f"scored {self.overlap:.0%}."
         )
 
 
@@ -185,13 +193,66 @@ def contradicts(a: str, b: str, *, threshold: float = CONTRADICTION_AT) -> float
     return _clash_score(_content(a), _content(b), threshold)
 
 
+class LexicalDetector:
+    """Contradiction detection by negation parity. The default, and free.
+
+    Drives from the negated claims rather than from every pair. A clash needs
+    opposite polarity, so only a negated belief can start one, and negations are
+    a small minority of anything anyone writes down — the affirmative majority is
+    never compared against itself at all.
+
+    Each negated belief then looks up only the beliefs sharing a word with it.
+    That is not a heuristic: an overlap of 0.75 cannot be reached by two sets
+    with nothing in common, so a candidate sharing no word cannot be a clash and
+    the pair never needs scoring.
+
+    What it cannot see is a disagreement nobody wrote as a negation. That is
+    `NLIDetector`'s job, and the reason this is a class rather than a method.
+    """
+
+    def clashes(
+        self, beliefs: list[Belief], threshold: float
+    ) -> list[tuple[Belief, Belief, float]]:
+        content = {b.id: _content(b.statement) for b in beliefs}
+        negated = {b.id: _polarity(b.statement) for b in beliefs}
+
+        # Only affirmative claims are indexed: they are the ones a negated
+        # belief will be looking for, and indexing the rest would cost memory to
+        # find pairs that are thrown away on the polarity check anyway.
+        postings: dict[str, list[str]] = defaultdict(list)
+        for belief in beliefs:
+            if not negated[belief.id]:
+                for token in content[belief.id]:
+                    postings[token].append(belief.id)
+
+        by_id = {b.id: b for b in beliefs}
+        found = []
+        for belief in beliefs:
+            if not negated[belief.id] or not content[belief.id]:
+                continue
+            candidates = {
+                other for token in content[belief.id] for other in postings.get(token, ())
+            }
+            for other_id in candidates:
+                overlap = _clash_score(content[belief.id], content[other_id], threshold)
+                if overlap:
+                    found.append((by_id[other_id], belief, overlap))
+        return found
+
+
 class ReasoningEngine:
     """Multi-hop inference, contradiction detection, and belief propagation."""
 
-    def __init__(self, store: BeliefStore, graph: KnowledgeGraph | None = None) -> None:
+    def __init__(
+        self,
+        store: BeliefStore,
+        graph: KnowledgeGraph | None = None,
+        detector: Detector | None = None,
+    ) -> None:
         self.store = store
         self._graph = graph
         self._graph_size = -1 if graph is None else len(store)
+        self.detector = detector or LexicalDetector()
 
     @property
     def graph(self) -> KnowledgeGraph:
@@ -247,36 +308,14 @@ class ReasoningEngine:
         sets with nothing in common, so a candidate that shares no word cannot
         be a clash and the pair never needs scoring.
 
-        ponytail: negation parity is still the signal, and it catches the clash
-        that matters — the same claim asserted and denied — with no LLM in the
-        loop. An entailment model is the upgrade for reworded disagreements;
-        this is only about not paying O(n^2) to find the ones we can already see.
+        Which pairs get scored, and how, belongs to the detector — negation
+        parity by default, entailment if one is wired up. This method's job is
+        to hand it the registry and put the answer in a stable order.
         """
-        beliefs = self.store.all()
-        content = {b.id: _content(b.statement) for b in beliefs}
-        negated = {b.id: _polarity(b.statement) for b in beliefs}
-
-        # Only affirmative claims are indexed: they are the ones a negated
-        # belief will be looking for, and indexing the rest would cost memory to
-        # find pairs that are thrown away on the polarity check anyway.
-        postings: dict[str, list[str]] = defaultdict(list)
-        for belief in beliefs:
-            if not negated[belief.id]:
-                for token in content[belief.id]:
-                    postings[token].append(belief.id)
-
-        by_id = {b.id: b for b in beliefs}
-        found = []
-        for belief in beliefs:
-            if not negated[belief.id] or not content[belief.id]:
-                continue
-            candidates = {
-                other for token in content[belief.id] for other in postings.get(token, ())
-            }
-            for other_id in candidates:
-                overlap = _clash_score(content[belief.id], content[other_id], threshold)
-                if overlap:
-                    found.append(Contradiction(a=by_id[other_id], b=belief, overlap=overlap))
+        found = [
+            Contradiction(a=a, b=b, overlap=score)
+            for a, b, score in self.detector.clashes(self.store.all(), threshold)
+        ]
         # Ties broken by id so the order does not depend on set iteration.
         found.sort(key=lambda c: (-c.overlap, c.a.id, c.b.id))
         return found

@@ -88,6 +88,41 @@ The atomic unit of cognition — a structured object, not a slice of text:
   Distinct from being disproven, and distinct from a merge — averaging "the rate
   is 4%" with "the rate is 5%" invents a number nobody ever claimed.
 
+### Two ways to notice a contradiction
+
+The default detector reads **negation**: "Rust has a garbage collector" against
+"Rust has no garbage collector". No model, no download, no dependency, and it
+catches the clash that matters most — the same claim asserted and denied.
+
+What it cannot see is a disagreement nobody phrased as a negation. *"Rust is
+memory safe"* and *"Rust leaks memory constantly"* contradict each other with no
+negation word between them, so parity reads both as affirmative and the pair is
+never scored. That is not a threshold to tune; the signal is absent.
+
+```bash
+CME_DETECTOR=nli   # or CME(":memory:", detector="nli")
+pip install 'cognitive-memory-engine[entailment]'
+```
+
+The entailment detector reads meaning instead, asking a small cross-encoder
+whether one belief contradicts the other, in both directions.
+
+**It is gated, and the gate is not an optimisation.** NLI models are trained on
+sentence pairs that are already about the same thing, so "unrelated" is barely
+in their vocabulary and they reach for "contradiction" instead:
+
+| pair | model says | reality |
+|---|---|---|
+| Rust is memory safe / Rust leaks memory constantly | 1.000 | correct |
+| Rust is memory safe / Rust prevents data races | 0.011 | correct |
+| Rust is memory safe / Qubits hold a superposition | **0.971** | nonsense |
+
+Ungated, it reports most of a registry as self-contradictory, confidently. So a
+pair must share some subject matter before the model is asked at all — those
+same three pairs score 0.400, 0.125 and 0.000 on content overlap, which
+separates them completely. The cost of the gate is a reworded contradiction
+sharing no vocabulary with its opposite, which this will miss.
+
 ### Upkeep
 
 Ageing, reconciling and pruning are each opt-in, which left nothing to put on a

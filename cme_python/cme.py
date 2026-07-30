@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from cme_python.config import settings
 from cme_python.engines.belief import BeliefEngine
+from cme_python.engines.entailment import get_detector
 from cme_python.engines.evidence import EvidenceEngine, GroundingReport, Justification
 from cme_python.engines.graph import KnowledgeGraph
 from cme_python.engines.memory import DEFAULT_HALF_LIFE_DAYS, MemoryEngine, MemoryStats
@@ -75,6 +76,7 @@ class CME:
         *,
         solver: str | None = None,
         retrieval: str | None = None,
+        detector: str | None = None,
     ) -> None:
         self.store = open_store(database or settings.database)
         self.beliefs = BeliefEngine(self.store)
@@ -88,8 +90,23 @@ class CME:
         self.optimizer = OptimizationEngine(
             self.evidence, solver=get_solver(solver or settings.solver)
         )
-        self.reasoning = ReasoningEngine(self.store)
+        self.reasoning = ReasoningEngine(
+            self.store, detector=get_detector(detector or settings.detector, **self._embedder())
+        )
         self.memory = MemoryEngine(self.store)
+
+    def _embedder(self) -> dict:
+        """The embedding function to hand a detector, if there is one.
+
+        Only vector retrieval builds an embedder, and a remote index may not
+        expose one at all. A detector that wants embeddings to pick candidate
+        pairs decides for itself what to do without — falling back to every
+        pair is a reasonable answer at small sizes, and better than this
+        constructor failing over an optional accelerator.
+        """
+        index = getattr(self._vectors, "index", None)
+        embedder = getattr(index, "embedder", None)
+        return {"embed": embedder.embed} if embedder is not None else {}
 
     def __enter__(self) -> CME:
         return self
