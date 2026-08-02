@@ -128,6 +128,15 @@ Neutral is not support: *"the document does not rule this out"* is not a reason
 for a memory engine to assert something. Word overlap still runs first, because
 it is free and dismisses most fabrications without a model call.
 
+The premise is a **two-sentence window** around the claim, not the document. A
+cross-encoder is trained on single-sentence premises, and a longer one takes it
+out of distribution, where it answers "neutral" to everything — with the claim
+sitting verbatim in the premise, entailment reads 0.995 at one sentence, 0.993
+at three, and 0.023 at four. On a four-paragraph document that rejected 16 of 16
+claims copied straight out of it. Two sentences is the smallest window that
+still resolves a pronoun to its antecedent, which the claims need to stand
+alone.
+
 The rule-based extractor remains the default — the model path costs an API call
 per document, and a second model call per claim with grounding on.
 
