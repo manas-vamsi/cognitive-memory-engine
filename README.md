@@ -172,11 +172,25 @@ in their vocabulary and they reach for "contradiction" instead:
 | Rust is memory safe / Rust prevents data races | 0.011 | correct |
 | Rust is memory safe / Qubits hold a superposition | **0.971** | nonsense |
 
-Ungated, it reports most of a registry as self-contradictory, confidently. So a
-pair must share some subject matter before the model is asked at all — those
-same three pairs score 0.400, 0.125 and 0.000 on content overlap, which
-separates them completely. The cost of the gate is a reworded contradiction
-sharing no vocabulary with its opposite, which this will miss.
+Ungated, it reports most of a registry as self-contradictory, confidently — and
+`reconcile()` retires beliefs on the strength of that, so a false positive takes
+a true belief out of recall. A pair must share subject matter before the model
+is asked at all. Over a twenty-five belief registry:
+
+| | content overlap |
+|---|---|
+| genuine contradictions | 0.64–0.86 (six or seven shared words) |
+| sparsest genuine pair seen | 0.400 (two shared words) |
+| unrelated pairs sharing one word | 0.10–0.14 |
+
+The bar sits at 0.25, between them. At 0.10 that registry reported *"TLS
+encrypts traffic between a client and a server"* as contradicting *"Replication
+streams the log to standby servers"* — on the word **server**.
+
+Measured on that registry: the model finds **5 of 5** reworded disagreements the
+lexical detector cannot see, with **no** false positives, in ~8s. The cost of
+the gate is a reworded contradiction sharing almost no vocabulary with its
+opposite, which this will miss.
 
 ### Upkeep
 
