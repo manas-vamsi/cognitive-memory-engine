@@ -70,14 +70,23 @@ DAMPING = 0.5
 DECISIVE_AT = 0.35
 """Evidence margin above which the losing side is retired, not just weakened.
 
-The margin is in `_weight` units — confidence scaled by the evidence for and
-against — so 0.35 is roughly a confident claim with a source facing an
-unsupported one. Below it the two sides are close enough that retiring either
-would be picking a winner on noise, and the honest act is to trust the weaker
-one less and leave both in play.
+The margin is in `_weight` units, and on ingested documents those come out
+quantised — one source of difference is worth 0.25:
+
+    equal sources        0.000   leave both alone
+    one more source      0.250   weaken the loser
+    two more sources     0.500   retire it
+    three more           0.750   retire it
+
+So 0.35, sitting between the first two gaps, means "retire when one side has at
+least two more independent sources than the other". Below it the sides are
+close enough that picking a winner would be picking on noise.
 
 Deliberately cautious. A wrongly-retired belief leaves recall and stops arguing
 its own case; a wrongly-kept one merely stays visible at a lower confidence.
+
+The margin alone is not enough, because decay moves confidence and `_weight`
+scales by it — see `_better_evidenced`.
 """
 
 
@@ -152,6 +161,28 @@ def _weight(belief: Belief) -> float:
     support = sum(e.strength for e in belief.evidence if e.supports)
     against = sum(e.strength for e in belief.evidence if not e.supports)
     return belief.confidence * (1 + support - against)
+
+
+def _better_evidenced(winner: Belief, loser: Belief) -> bool:
+    """Does the winner actually have more support, or just a bigger number?
+
+    Retirement is supposed to mean "the evidence decisively favours the other
+    side". But `_weight` scales evidence by confidence, and decay moves
+    confidence — so a belief nobody had re-cited in six months lost half its
+    weight and was retired by a contradicting claim carrying exactly the same
+    single source. `maintain` ages before it reconciles, which made that the
+    normal path rather than a corner.
+
+    Age makes a belief quieter, not wrong; that is decay's own rule, and the
+    floor exists so time alone can never remove a belief. Retiring one for being
+    old went around both. So the margin decides *how much* better evidenced a
+    winner is, and this decides whether it is better evidenced at all.
+    """
+    return _support(winner) > _support(loser)
+
+
+def _support(belief: Belief) -> float:
+    return sum(e.strength for e in belief.evidence if e.supports)
 
 
 def _polarity(statement: str) -> int:
@@ -379,7 +410,7 @@ class ReasoningEngine:
             margin = _weight(clash.winner) - _weight(clash.loser)
             if margin <= 0:
                 continue
-            if margin >= decisive:
+            if margin >= decisive and _better_evidenced(clash.winner, clash.loser):
                 loser = clash.loser.supersede(clash.winner)
                 self.store.save(loser)
             else:

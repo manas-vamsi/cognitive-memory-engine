@@ -205,9 +205,25 @@ done = cme.maintain()  # or POST /maintain, nightly
 The order is the argument. Ageing runs first so contradictions are judged on
 current confidences, not stale ones — a claim nobody has backed in a year should
 not outrank a fresh one purely for having been written first. Pruning runs last
-so anything the first two steps disproved leaves in the same pass. Ageing alone
-can never cause a deletion: decay stops at a floor well above the pruning
-threshold, so only contradicting evidence can push a belief that far down.
+so anything the first two steps disproved leaves in the same pass.
+
+**Ageing alone can never remove a belief**, by either route. It cannot delete
+one: decay stops at a floor well above the pruning threshold. And it cannot get
+one retired: retirement additionally requires the winner to hold more supporting
+evidence, not merely a larger number. Without that second rule a true claim
+nobody had re-cited in six months was superseded by a contradicting claim
+carrying exactly the same single source — decay had halved its confidence, and
+the margin was scaled by confidence. Age makes a belief quieter, not wrong.
+
+On ingested documents the margin is quantised, one source of difference being
+worth 0.25, so the 0.35 bar means *retire when one side has at least two more
+independent sources*:
+
+| difference | margin | outcome |
+|---|---|---|
+| equal sources | 0.000 | leave both alone |
+| one more source | 0.250 | weaken the loser |
+| two or more | 0.500+ | retire it |
 
 ### Time-aware belief evolution
 
