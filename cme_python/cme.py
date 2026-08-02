@@ -15,7 +15,12 @@ from collections.abc import Iterable
 from pydantic import BaseModel
 
 from cme_python.config import settings
-from cme_python.engines.belief import BeliefEngine
+from cme_python.engines.belief import (
+    BeliefEngine,
+    Extractor,
+    LLMExtractor,
+    rule_based_extract,
+)
 from cme_python.engines.entailment import get_detector
 from cme_python.engines.evidence import EvidenceEngine, GroundingReport, Justification
 from cme_python.engines.graph import KnowledgeGraph
@@ -50,6 +55,25 @@ class GroundedContext(BaseModel):
         return "\n".join(lines)
 
 
+def _extractor(name: str | None) -> Extractor:
+    """The claim extractor to hand the Belief Engine.
+
+    Rule-based unless asked otherwise, and imported lazily so the default path
+    never touches a vendor SDK. A model that cannot be built is a hard error
+    here rather than a quiet downgrade: a caller who asked for LLM extraction
+    and silently got regexes would have no way to know why their documents came
+    out thin.
+    """
+    if (name or settings.extractor) != "llm":
+        return rule_based_extract
+
+    from cme_python.clients.base import build_client  # noqa: PLC0415
+
+    if not settings.llm:
+        raise ValueError("CME_EXTRACTOR=llm needs CME_LLM set to 'claude' or 'openai'.")
+    return LLMExtractor(build_client(settings.llm, settings.llm_model))
+
+
 class Maintenance(BaseModel):
     """What one maintenance pass did to the registry."""
 
@@ -77,9 +101,10 @@ class CME:
         solver: str | None = None,
         retrieval: str | None = None,
         detector: str | None = None,
+        extractor: str | None = None,
     ) -> None:
         self.store = open_store(database or settings.database)
-        self.beliefs = BeliefEngine(self.store)
+        self.beliefs = BeliefEngine(self.store, extractor=_extractor(extractor))
         mode = retrieval or settings.retrieval
         self._vectors = (
             VectorRetriever(self.store, cache=cache_path_for(self.store.path))
