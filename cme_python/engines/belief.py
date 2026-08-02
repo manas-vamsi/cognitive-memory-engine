@@ -55,9 +55,25 @@ def _long_enough(sentence: str) -> bool:
     So the looser count applies only to text that ends like a sentence.
     Headings and list items are not punctuated; claims are. That keeps every
     fragment currently rejected rejected, and only ever admits more.
+
+    Three-word sentences are the other half of the same problem. "Rust is
+    fast." could not be extracted from a document, yet arrived in the registry
+    happily as a split of "Rust is fast and has no garbage collector" — the
+    same claim, present or absent depending on how the author phrased the
+    sentence around it. `split_claims` already accepts it at three words and
+    says so; this is where the two disagreed.
+
+    At three words the length has stopped carrying any signal, so the verb does
+    it instead — the same test `split_claims` applies to its parts. "Rust is
+    fast." has one; "See figure 3.", "Install the package." and "Table of
+    contents." do not, and stay out.
     """
-    words = len(_WORD.findall(sentence) if _ENDS_A_SENTENCE.search(sentence) else sentence.split())
-    return words >= MIN_WORDS
+    if not _ENDS_A_SENTENCE.search(sentence):
+        return len(sentence.split()) >= MIN_WORDS
+    words = _WORD.findall(sentence)
+    if len(words) >= MIN_WORDS:
+        return True
+    return len(words) >= MIN_CLAIM_WORDS and any(w.lower() in _VERBS for w in words)
 
 
 MIN_CLAIM_WORDS = 3
