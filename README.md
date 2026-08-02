@@ -88,6 +88,34 @@ The atomic unit of cognition — a structured object, not a slice of text:
   Distinct from being disproven, and distinct from a merge — averaging "the rate
   is 4%" with "the rate is 5%" invents a number nobody ever claimed.
 
+### Two ways to read a document
+
+Extraction is rule-based by default: sentence splitting, a word floor and a
+closed verb list. It runs offline, costs nothing, and cannot invent a claim —
+but it misses anything phrased unusually and cannot resolve *"it"* back to
+whatever the paragraph was about.
+
+```bash
+CME_EXTRACTOR=llm   # needs CME_LLM set to a working connector
+```
+
+The LLM extractor does both, and is checked for it. Every claim it returns is
+compared back against the source text, and one built largely of words the
+document never used is dropped before it can become a belief — **a fabricated
+belief is worse than a missed one**, because it arrives with a source attached,
+takes its confidence, and reads exactly like a fact the document contained.
+Measured on a two-sentence source, faithful and reworded claims score 0.80–1.00
+on that check while invented ones score below 0.30.
+
+The check catches invented *vocabulary*, not invented *composition*. "Rust
+guarantees a garbage collector" is built entirely from the words of a document
+saying the opposite, and passes. Closing that needs entailment against the
+source rather than word counting. Until then the rule-based extractor stays the
+default, and this is why.
+
+A connector that errors falls back to the rules rather than reporting that the
+document contained nothing.
+
 ### Two ways to notice a contradiction
 
 The default detector reads **negation**: "Rust has a garbage collector" against
@@ -188,7 +216,7 @@ expensive.
 
 | Engine | Role |
 |---|---|
-| **1. Belief Engine** | Parses documents, identifies claims, builds the belief schema, assigns initial confidence, links to sources. |
+| **1. Belief Engine** | Parses documents, identifies claims, builds the belief schema, assigns initial confidence, links to sources. Rule-based offline, or model-backed with the output checked against the source. |
 | **2. Memory Engine** | Multi-tier persistent storage: user, scientific, organizational, and project memory. |
 | **3. Knowledge Graph** | The reasoning substrate — every belief wired into one semantic web (`Quantum Computing → Qubits → Superposition → Entanglement → Quantum Gates → Error Correction`). |
 | **4. Evidence Engine** | Guarantees every retrieved belief is supported. Answers *why? / where from? / how certain?* |

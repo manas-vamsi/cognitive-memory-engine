@@ -48,6 +48,14 @@ class Settings:
     and `torch`.
     """
 
+    extractor: str = os.environ.get("CME_EXTRACTOR", "rule")
+    """`rule` (regex and a closed verb list) or `llm` (the configured model).
+
+    Rule-based by default: it runs offline, costs nothing, and never invents a
+    claim. `llm` reads phrasing the rules miss and resolves pronouns, and needs
+    `CME_LLM` set to a connector that works.
+    """
+
     llm: str = os.environ.get("CME_LLM", "")
     """`claude` or `openai` to enable /ask. Empty leaves the endpoint disabled."""
 

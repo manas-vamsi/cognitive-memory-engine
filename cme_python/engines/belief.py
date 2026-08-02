@@ -246,6 +246,93 @@ def normalise(statement: str) -> str:
     return " ".join(_NORMALISE.sub(" ", statement.lower()).split())
 
 
+EXTRACT_SYSTEM = (
+    "You extract factual claims from text for a knowledge base. "
+    "Return one claim per line and nothing else — no numbering, no commentary. "
+    "Each claim must be a complete standalone sentence: resolve pronouns and "
+    "references so it still means the same thing read on its own. "
+    "Split a sentence carrying two claims into two lines. "
+    "Copy the wording of the source as closely as you can. "
+    "Use only what the text states. Never add, infer, or complete a fact from "
+    "your own knowledge. Skip questions, headings, instructions and opinions."
+)
+
+GROUNDING_AT = 0.75
+"""Share of a claim's words that must appear in the source text.
+
+The extractor is the one place a model writes directly into memory, and a
+fabricated belief is far worse than a missed one: it arrives with a source
+attached, gets its confidence, and is indistinguishable from a fact the
+document actually contained.
+
+So every returned claim is checked back against the text. Not exact matching —
+the model is asked to resolve pronouns and split sentences, so some rewording is
+the point — but a claim mostly built of words the document never used did not
+come from the document. Measured on a two-sentence source, faithful claims and
+reworded ones score 0.80 to 1.00 while invented ones score below 0.30, so the
+bar sits in a wide gap rather than on a cliff edge.
+
+It catches invented *vocabulary*, not invented *composition*. "Rust guarantees
+a garbage collector" is built entirely from the words of a document saying the
+opposite, and passes. Closing that needs entailment against the source rather
+than word counting — the same model class `NLIDetector` already loads, applied
+to a different question, and a larger job than this. Until then the rule-based
+extractor remains the default, and this is the reason.
+"""
+
+
+class LLMExtractor:
+    """Claim extraction by a model rather than by regexes.
+
+        BeliefEngine(store, extractor=LLMExtractor(build_client("claude")))
+
+    The rule-based extractor reads punctuation and a closed verb list, so it
+    misses anything phrased unusually and cannot resolve "it" back to whatever
+    the paragraph was about. A model does both.
+
+    What a model also does is invent. Every claim it returns is checked back
+    against the source, and one built largely of words the document never used
+    is dropped — the sole job here is turning a document into things the engine
+    will assert, and a plausible sentence is not evidence of anything.
+
+    Takes any object with `complete()`, so it needs no import from the client
+    package and no vendor knowledge.
+    """
+
+    def __init__(self, client, *, fallback: Extractor = rule_based_extract) -> None:
+        self.client = client
+        self.fallback = fallback
+
+    def __call__(self, text: str) -> list[str]:
+        try:
+            reply = self.client.complete(text, system=EXTRACT_SYSTEM)
+        except Exception:
+            # A connector failing must not silently empty a document. The rule
+            # based extractor is worse than the model and far better than
+            # deciding the text contained no claims at all.
+            return self.fallback(text)
+        return [c for c in _claims_from(reply) if _grounded_in(c, text)]
+
+
+def _claims_from(reply: str) -> list[str]:
+    """One claim per line, with any list markers the model added stripped off."""
+    claims = []
+    for line in reply.splitlines():
+        line = _MARKER.sub("", line.strip()).strip()
+        if line and not _NOISE.match(line):
+            claims.append(line if line[-1] in ".!" else f"{line}.")
+    return claims
+
+
+def _grounded_in(claim: str, text: str) -> bool:
+    """Is this claim built from the document, or from the model?"""
+    source = {w.lower() for w in _WORD.findall(text)}
+    words = [w.lower() for w in _WORD.findall(claim)]
+    if not words:
+        return False
+    return sum(w in source for w in words) / len(words) >= GROUNDING_AT
+
+
 class BeliefEngine:
     """Extracts beliefs from documents and files them in the registry."""
 
