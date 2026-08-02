@@ -56,6 +56,15 @@ class Settings:
     `CME_LLM` set to a connector that works.
     """
 
+    grounding: str = os.environ.get("CME_GROUNDING", "words")
+    """How an extracted claim is checked against its source: `words` or `entailment`.
+
+    Word overlap is free and catches invented vocabulary. `entailment` asks a
+    model whether the document actually entails the claim, which additionally
+    catches a claim built from the document's own words to say the opposite —
+    at a model call per claim, and the `entailment` extra.
+    """
+
     llm: str = os.environ.get("CME_LLM", "")
     """`claude` or `openai` to enable /ask. Empty leaves the endpoint disabled."""
 

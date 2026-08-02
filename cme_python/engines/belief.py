@@ -299,9 +299,23 @@ class LLMExtractor:
     package and no vendor knowledge.
     """
 
-    def __init__(self, client, *, fallback: Extractor = rule_based_extract) -> None:
+    def __init__(
+        self,
+        client,
+        *,
+        fallback: Extractor = rule_based_extract,
+        grounder=None,
+    ) -> None:
         self.client = client
         self.fallback = fallback
+        self.grounder = grounder
+        """Optional second check, on meaning rather than vocabulary.
+
+        Anything with `supports(source, claim)`. `NLIGrounder` is the one that
+        exists; it asks a model whether the document entails the claim, which is
+        what catches a claim assembled out of the document's own words to say
+        the opposite of what the document said.
+        """
 
     def __call__(self, text: str) -> list[str]:
         try:
@@ -311,7 +325,19 @@ class LLMExtractor:
             # based extractor is worse than the model and far better than
             # deciding the text contained no claims at all.
             return self.fallback(text)
-        return [c for c in _claims_from(reply) if _grounded_in(c, text)]
+        return [c for c in _claims_from(reply) if self._keeps(c, text)]
+
+    def _keeps(self, claim: str, text: str) -> bool:
+        """Word overlap first, because it is free and rejects most fabrications.
+
+        The grounder is a model call per surviving claim, so the cheap check
+        goes ahead of it. Both must pass: the second is strictly stronger, but
+        running it alone would pay a model call for claims a set intersection
+        can already dismiss.
+        """
+        if not _grounded_in(claim, text):
+            return False
+        return self.grounder is None or self.grounder.supports(text, claim)
 
 
 def _claims_from(reply: str) -> list[str]:

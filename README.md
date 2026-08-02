@@ -107,11 +107,29 @@ takes its confidence, and reads exactly like a fact the document contained.
 Measured on a two-sentence source, faithful and reworded claims score 0.80–1.00
 on that check while invented ones score below 0.30.
 
-The check catches invented *vocabulary*, not invented *composition*. "Rust
+Word counting catches invented *vocabulary*, not invented *composition* — "Rust
 guarantees a garbage collector" is built entirely from the words of a document
-saying the opposite, and passes. Closing that needs entailment against the
-source rather than word counting. Until then the rule-based extractor stays the
-default, and this is why.
+saying the opposite, and passes it. So the same model class that finds
+contradictions can be pointed at the claim instead:
+
+```bash
+CME_GROUNDING=entailment   # a model call per claim; needs the entailment extra
+```
+
+Asked whether the document entails a claim taken from it:
+
+| claim | entailment | |
+|---|---|---|
+| faithful, and pronoun-resolved rewrites | 0.83–0.99 | kept |
+| recombines the document's words to say the opposite | 0.001 | **dropped** (0.998 contradiction) |
+| invented outright | 0.000 | **dropped** (0.996 neutral) |
+
+Neutral is not support: *"the document does not rule this out"* is not a reason
+for a memory engine to assert something. Word overlap still runs first, because
+it is free and dismisses most fabrications without a model call.
+
+The rule-based extractor remains the default — the model path costs an API call
+per document, and a second model call per claim with grounding on.
 
 A connector that errors falls back to the rules rather than reporting that the
 document contained nothing.

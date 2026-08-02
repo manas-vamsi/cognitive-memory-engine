@@ -71,7 +71,13 @@ def _extractor(name: str | None) -> Extractor:
 
     if not settings.llm:
         raise ValueError("CME_EXTRACTOR=llm needs CME_LLM set to 'claude' or 'openai'.")
-    return LLMExtractor(build_client(settings.llm, settings.llm_model))
+
+    grounder = None
+    if settings.grounding == "entailment":
+        from cme_python.engines.entailment import NLIGrounder  # noqa: PLC0415
+
+        grounder = NLIGrounder()
+    return LLMExtractor(build_client(settings.llm, settings.llm_model), grounder=grounder)
 
 
 class Maintenance(BaseModel):
