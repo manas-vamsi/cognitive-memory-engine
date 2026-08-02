@@ -56,12 +56,18 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install transformers
 
-      - name: Test the entailment detector
+      - name: Test everything that needs the model
         run: |
           # The model-backed tests skip themselves when the stack is absent, so
           # prove it is present rather than trusting a green run of nothing.
           python -c "from importlib.util import find_spec; assert find_spec('torch') and find_spec('transformers')"
-          pytest tests/python_tests/test_entailment.py -q
+          # Both files, because the grounder's tests live with the extractor and
+          # were silently skipping everywhere: this job ran only the detector's,
+          # and the job that ran the extractor's had no model installed.
+          pytest tests/python_tests/test_entailment.py tests/python_tests/test_llm_extractor.py -q
+          # And nothing in them may skip, which is what hid that in the first place.
+          pytest tests/python_tests/test_entailment.py tests/python_tests/test_llm_extractor.py -q -rs \
+            | grep -q SKIPPED && { echo "model-backed tests skipped in the job built to run them"; exit 1; } || true
 
   postgres:
     # The store contract, run against a real PostgreSQL. The same tests cover
