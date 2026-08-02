@@ -12,6 +12,7 @@ from cme_python.engines.belief import (
     BeliefEngine,
     normalise,
     rule_based_extract,
+    split_claims,
     split_sentences,
 )
 from cme_python.models import SourceKind
@@ -61,6 +62,28 @@ def test_a_claim_is_not_lost_to_a_hyphen():
     assert rule_based_extract("The state-of-the-art model wins.") == [
         "The state-of-the-art model wins."
     ]
+
+
+def test_a_short_claim_is_extracted_as_readily_as_it_is_split_out():
+    """The two floors disagreed about the same sentence.
+
+    "Rust is fast." could not be extracted from a document, yet arrived in the
+    registry happily as a split of "Rust is fast and has no garbage collector" —
+    present or absent depending on how the author phrased the sentence around it.
+    """
+    assert rule_based_extract("Rust is fast.") == ["Rust is fast."]
+    assert "Rust is fast." in split_claims("Rust is fast and has no garbage collector.")
+
+
+def test_a_short_sentence_still_needs_a_verb_to_be_a_claim():
+    """At three words the length carries no signal, so the verb has to.
+
+    Otherwise every imperative and table-of-contents line in a document becomes
+    something the engine claims to believe.
+    """
+    assert rule_based_extract("See figure 3.") == []
+    assert rule_based_extract("Install the package.") == []
+    assert rule_based_extract("Table of contents.") == []
 
 
 def test_hyphens_do_not_promote_a_fragment_into_a_claim():
