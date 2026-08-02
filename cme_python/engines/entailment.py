@@ -145,8 +145,52 @@ class NLIGrounder:
         self.entailed_at = entailed_at
 
     def supports(self, source: str, claim: str) -> bool:
-        scores = _scores(_load(self.model_name), source, claim)
+        premise = _passage_for(claim, source)
+        scores = _scores(_load(self.model_name), premise, claim)
         return scores.get("entailment", 0.0) >= self.entailed_at
+
+
+WINDOW = 2
+"""Sentences of the source shown to the model as the premise.
+
+Not a performance knob — the whole document does not work. A cross-encoder is
+trained on single-sentence premises, and a longer one takes it out of
+distribution, where it answers "neutral" to everything. Measured with the claim
+sitting verbatim in the premise:
+
+    1 sentence    0.995 entailment
+    2 sentences   0.993
+    3 sentences   0.993
+    4 sentences   0.023   (0.976 neutral)
+
+Passing a real four-paragraph document rejected 16 of 16 claims copied straight
+out of it. Every test this was shipped with used a two-sentence source, so every
+test passed.
+
+Two rather than one because a claim is asked to stand alone: "It was first
+released in 2015" becomes "Rust was first released in 2015", and the model
+scores that 0.000 against the pronoun sentence by itself and 0.990 against the
+sentence pair carrying the antecedent. Two is the smallest window that resolves
+a pronoun, and three was the largest that still worked.
+"""
+
+
+def _passage_for(claim: str, source: str) -> str:
+    """The stretch of the source a claim should be judged against.
+
+    The sentence sharing the most words with the claim, plus the one before it
+    — near enough always the sentence the claim came from, and its antecedent.
+    """
+    from cme_python.engines.belief import split_sentences  # noqa: PLC0415
+    from cme_python.engines.reasoning import _content  # noqa: PLC0415
+
+    sentences = split_sentences(source)
+    if len(sentences) <= WINDOW:
+        return source
+
+    wanted = _content(claim)
+    best = max(range(len(sentences)), key=lambda i: len(wanted & _content(sentences[i])))
+    return " ".join(sentences[max(best - WINDOW + 1, 0) : best + 1])
 
 
 def _missing() -> RuntimeError:

@@ -137,6 +137,59 @@ def test_a_claim_the_source_merely_permits_is_not_believed():
     assert extract(DOC) == []
 
 
+CORPUS = """
+Rust guarantees memory safety without a garbage collector. Its ownership model
+tracks the lifetime of every value at compile time. The borrow checker rejects
+programs that would alias mutable state. Rust was first released in 2015 by
+Mozilla Research.
+
+Python is commonly used in machine learning. The global interpreter lock
+prevents two threads from executing bytecode at the same time. CPython remains
+the reference implementation of the language.
+
+Qubits can hold a superposition of states. Decoherence limits how long a quantum
+state survives in hardware.
+
+PostgreSQL uses multiversion concurrency control to isolate transactions. Vacuum
+reclaims space occupied by rows that are no longer visible.
+"""
+
+
+@needs_model
+def test_the_grounder_keeps_a_whole_document_of_real_claims():
+    """The check that a two-sentence source cannot make.
+
+    Every claim here is a verbatim sentence of the document, so every rejection
+    is a mistake. Passing the whole document as the premise rejected all of
+    them — a cross-encoder trained on single-sentence premises answers
+    "neutral" to everything once the premise grows past about three sentences,
+    and every test this shipped with used a source too short to show it.
+    """
+    from cme_python.engines.entailment import NLIGrounder
+
+    grounder = NLIGrounder()
+    claims = rule_based_extract(CORPUS)
+
+    assert len(claims) >= 10  # a real document, not a two-liner
+    assert [c for c in claims if not grounder.supports(CORPUS, c)] == []
+
+
+@needs_model
+def test_the_grounder_still_refuses_fabrications_from_a_whole_document():
+    """The other half: keeping everything would pass the test above."""
+    from cme_python.engines.entailment import NLIGrounder
+
+    grounder = NLIGrounder()
+    fabricated = [
+        "Rust guarantees memory safety with a garbage collector.",
+        "The borrow checker accepts programs that alias mutable state.",
+        "The global interpreter lock allows two threads to execute bytecode at once.",
+        "Vacuum reclaims space occupied by rows that are still visible.",
+        "Qubits were first released in 2015 by Mozilla Research.",
+    ]
+    assert [c for c in fabricated if grounder.supports(CORPUS, c)] == []
+
+
 def test_a_failing_model_falls_back_rather_than_emptying_the_document():
     """A connector having a bad minute must not read as "this text said nothing"."""
     extract = LLMExtractor(Broken())
