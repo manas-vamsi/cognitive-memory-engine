@@ -255,6 +255,38 @@ def test_maintain_does_the_three_upkeep_jobs_in_one_pass(cme):
     assert cme.maintain().changed == 0  # a second pass has nothing left to do
 
 
+def test_maintain_never_retires_a_belief_for_being_old(cme):
+    """Age makes a belief quieter, not wrong — including through reconciliation.
+
+    `maintain` ages before it reconciles, and decay moves confidence, which the
+    evidence margin was scaled by. So a true claim nobody had re-cited in six
+    months lost half its weight and was retired by a contradicting claim
+    carrying exactly the same single source. Retirement takes it out of recall
+    for good, so this was silent and permanent.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    old = cme.ingest("Rust has no garbage collector.", locator="the Rust book")[0]
+    cme.ingest("Rust has a garbage collector.", locator="a blog post")
+    old.confidence_at = datetime.now(UTC) - timedelta(days=365)
+    cme.store.save(old)
+
+    done = cme.maintain()
+    assert done.decayed == 1  # it did age
+    assert done.retired == 0  # but nothing was retired for it
+    assert done.weakened == 1  # the clash was handled by trusting it less
+    assert cme.store.get(old.id).superseded_by is None
+
+
+def test_maintain_still_retires_what_the_evidence_beats(cme):
+    """The other half: a guard that never retires would pass the test above."""
+    cme.ingest("Elixir has no garbage collector.", locator="a blog post")
+    for locator in ("the docs", "the BEAM book", "the release notes"):
+        cme.ingest("Elixir has a garbage collector.", locator=locator)
+
+    assert cme.maintain().retired == 1
+
+
 def test_maintain_never_deletes_a_belief_for_being_old(cme):
     """Decay stops well above the pruning threshold. Silence is not refutation."""
     from datetime import UTC, datetime, timedelta
