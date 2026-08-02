@@ -16,6 +16,7 @@ implementations return the same pairs-with-scores whatever they know.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Protocol
 
 from cme_python.models import Belief
@@ -90,6 +91,64 @@ the model cannot judge.
 """
 
 
+ENTAILED_AT = 0.5
+"""How strongly the source must entail a claim for it to be believed.
+
+For grounding extraction rather than finding clashes, and the separation is
+wide. Asked whether a document entails a claim taken from it:
+
+    faithful, and pronoun-resolved rewrites      0.83 - 0.99  entailment
+    a claim recombining the document's words     0.001        (0.998 contradiction)
+    a claim invented outright                    0.000        (0.996 neutral)
+
+So the bar is only that entailment wins, not that it wins narrowly. Note this
+catches the invented claim as well, which word overlap also caught, *and* the
+recombined one, which it could not: "Rust guarantees a garbage collector" is
+built entirely from the words of a document saying the opposite, and the model
+calls it a contradiction at 0.998.
+"""
+
+
+@lru_cache(maxsize=4)
+def _load(model_name: str):
+    """The classifier for a model name, loaded once per process.
+
+    Cached because the detector and the grounder ask for the same model, and a
+    few hundred megabytes is not worth holding twice to save one dictionary.
+    Loaded on first use, not on construction: wiring up a model and never
+    asking it anything should cost nothing.
+    """
+    try:
+        from transformers import pipeline  # noqa: PLC0415
+    except ImportError:
+        raise _missing() from None
+    return pipeline("text-classification", model=model_name, top_k=None)
+
+
+class NLIGrounder:
+    """Checks a claim against the text it was supposedly taken from.
+
+        LLMExtractor(client, grounder=NLIGrounder())
+
+    The word-overlap check in the extractor sees invented *vocabulary*. This
+    sees invented *meaning*, which is the failure that survives it: a claim
+    assembled from the document's own words can say the opposite of the
+    document and still score a perfect overlap.
+
+    Asks the model whether the source entails the claim, and keeps it only if
+    it does. Neutral is not good enough — "the document does not rule this out"
+    is not a reason for a memory engine to assert something.
+    """
+
+    def __init__(self, model: str = DEFAULT_MODEL, *, entailed_at: float = ENTAILED_AT) -> None:
+        self.model_name = model
+        self.entailed_at = entailed_at
+
+    def supports(self, source: str, claim: str) -> bool:
+        scores = _scores(_load(self.model_name), source, claim)
+        return scores.get("entailment", 0.0) >= self.entailed_at
+
+
 def _missing() -> RuntimeError:
     return RuntimeError(
         "The NLI detector needs `transformers` and `torch`, which CME does not "
@@ -127,18 +186,7 @@ class NLIDetector:
         self._pipe = None
 
     def _classifier(self):
-        """Loaded on first use, not on construction.
-
-        Constructing an engine should not download a model. A caller that wires
-        up the NLI detector and then never asks for contradictions pays nothing.
-        """
-        if self._pipe is None:
-            try:
-                from transformers import pipeline  # noqa: PLC0415
-            except ImportError:
-                raise _missing() from None
-            self._pipe = pipeline("text-classification", model=self.model_name, top_k=None)
-        return self._pipe
+        return _load(self.model_name)
 
     def _candidates(self, beliefs: list[Belief]) -> set[tuple[int, int]]:
         """Index pairs worth asking the model about.
@@ -189,17 +237,19 @@ class NLIDetector:
         return found
 
 
-def _contradiction_score(classify, premise: str, hypothesis: str) -> float:
-    """How strongly the model reads the second sentence as denying the first."""
+def _scores(classify, premise: str, hypothesis: str) -> dict[str, float]:
+    """Every label the model assigns the pair, lowercased."""
     scores = classify({"text": premise, "text_pair": hypothesis})
     # `top_k=None` returns every label; the nesting depends on the pipeline
     # version, so unwrap one level if it came back wrapped.
     if scores and isinstance(scores[0], list):
         scores = scores[0]
-    for entry in scores:
-        if entry["label"].lower().startswith("contradict"):
-            return float(entry["score"])
-    return 0.0
+    return {entry["label"].lower(): float(entry["score"]) for entry in scores}
+
+
+def _contradiction_score(classify, premise: str, hypothesis: str) -> float:
+    """How strongly the model reads the second sentence as denying the first."""
+    return _scores(classify, premise, hypothesis).get("contradiction", 0.0)
 
 
 def _overlap(a: set[str], b: set[str]) -> float:

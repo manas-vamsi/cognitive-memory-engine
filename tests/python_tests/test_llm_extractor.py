@@ -30,6 +30,18 @@ class Broken:
         raise RuntimeError("the vendor is having a day")
 
 
+def _has(module: str) -> bool:
+    from importlib.util import find_spec
+
+    return find_spec(module) is not None
+
+
+needs_model = pytest.mark.skipif(
+    not (_has("transformers") and _has("torch")),
+    reason="the entailment grounder needs transformers and torch",
+)
+
+
 def test_one_claim_per_line():
     extract = LLMExtractor(
         Canned(
@@ -76,17 +88,53 @@ def test_rewording_the_document_still_counts_as_grounded():
     assert extract(DOC) == ["Rust was first released in 2015."]
 
 
-def test_the_check_catches_invented_words_not_invented_meaning():
-    """The known hole, pinned so nobody mistakes this for a correctness guarantee.
+RECOMBINED = "Rust guarantees a garbage collector."
+SOURCE = "Rust guarantees memory safety without a garbage collector."
 
-    "Rust guarantees a garbage collector" is built entirely from the words of a
-    document that says the opposite, so word counting cannot see it. Closing
-    that needs entailment against the source, not a bigger threshold.
+
+def test_word_overlap_alone_cannot_see_invented_meaning():
+    """Why the grounder exists, kept as the contrast to the test below.
+
+    Every word of "Rust guarantees a garbage collector" appears in a document
+    saying the opposite, so counting words cannot tell them apart.
     """
-    source = "Rust guarantees memory safety without a garbage collector."
-    assert LLMExtractor(Canned("Rust guarantees a garbage collector."))(source) == [
-        "Rust guarantees a garbage collector."
-    ]
+    assert LLMExtractor(Canned(RECOMBINED))(SOURCE) == [RECOMBINED]
+
+
+@needs_model
+def test_the_grounder_rejects_a_claim_the_source_contradicts():
+    """The hole from the word-overlap check, closed.
+
+    Same claim, same source, same perfect word overlap — and now dropped,
+    because the model is asked whether the document entails it rather than
+    whether it reuses its vocabulary.
+    """
+    from cme_python.engines.entailment import NLIGrounder
+
+    extract = LLMExtractor(Canned(RECOMBINED), grounder=NLIGrounder())
+    assert extract(SOURCE) == []
+
+
+@needs_model
+def test_the_grounder_keeps_what_the_source_actually_says():
+    """A guard that rejects everything would pass the test above and be useless."""
+    from cme_python.engines.entailment import NLIGrounder
+
+    extract = LLMExtractor(
+        Canned("Rust guarantees memory safety.\nRust was first released in 2015."),
+        grounder=NLIGrounder(),
+    )
+    assert extract(DOC) == ["Rust guarantees memory safety.", "Rust was first released in 2015."]
+
+
+@needs_model
+def test_a_claim_the_source_merely_permits_is_not_believed():
+    """Neutral is not support. "The document does not rule this out" is not a
+    reason for a memory engine to assert something."""
+    from cme_python.engines.entailment import NLIGrounder
+
+    extract = LLMExtractor(Canned("Rust was released in 2015 by Mozilla."), grounder=NLIGrounder())
+    assert extract(DOC) == []
 
 
 def test_a_failing_model_falls_back_rather_than_emptying_the_document():
