@@ -72,22 +72,37 @@ alternative is scoring every pair through a transformer, which is quadratic in
 model calls rather than in set operations, and that is not a trade anyone wants.
 """
 
-RELATED_AT = 0.1
+RELATED_AT = 0.25
 """Content overlap a pair needs before the model is asked about it at all.
 
 Not an optimisation. NLI models are trained on premise-hypothesis pairs that are
 already about the same thing, so "unrelated" is barely in their vocabulary and
-they reach for "contradiction" instead. Measured on this one:
+they reach for "contradiction" instead:
 
     Rust is memory-safe / Rust leaks memory constantly     1.000   correct
     Rust is memory-safe / Rust prevents data races         0.011   correct
     Rust is memory-safe / Qubits hold a superposition      0.971   nonsense
 
-Without this gate the detector reports most of the registry as self-
-contradictory, confidently. The same pairs score 0.400, 0.125 and 0.000 on
-content overlap, so a low bar separates them completely — low enough that it
-only removes pairs sharing no subject matter at all, which is exactly the case
-the model cannot judge.
+Without a gate the detector reports most of a registry as self-contradictory,
+confidently, and `reconcile` retires real beliefs on the strength of it.
+
+The bar started at 0.1, which was enough to separate the three pairs above and
+not enough for a registry. One shared stemmed word clears it, and on
+twenty-five ordinary beliefs that was "TLS encrypts traffic between a client
+and a server" against "Replication streams the log to standby servers"
+(*server*), and "Cargo is the package manager for Rust" against "Docker
+packages an application" (*package*) — both reported as contradictions.
+
+Measured over that registry, the separation is wide and not where the first
+guess put it:
+
+    genuine contradictions      0.64 - 0.86   (six or seven shared words)
+    unrelated, one word apiece  0.10 - 0.14
+
+with the sparsest genuine pair seen anywhere — "Rust is memory-safe" against
+"Rust leaks memory constantly", two shared words — at 0.400. So the bar sits at
+0.25, between the worst true positive and the best false one, with room either
+side rather than tucked against either.
 """
 
 

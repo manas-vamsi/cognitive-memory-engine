@@ -122,6 +122,66 @@ def test_the_nli_detector_is_never_asked_about_unrelated_beliefs():
         )
 
 
+REGISTRY = [
+    "Rust guarantees memory safety without a garbage collector.",
+    "The borrow checker rejects programs that alias mutable state.",
+    "Rust was first released in 2015 by Mozilla Research.",
+    "Cargo is the package manager for Rust.",
+    "Python is commonly used in machine learning.",
+    "The global interpreter lock prevents two threads from running bytecode at once.",
+    "Qubits can hold a superposition of states.",
+    "Decoherence limits how long a quantum state survives.",
+    "PostgreSQL uses multiversion concurrency control.",
+    "Vacuum reclaims space held by rows that are no longer visible.",
+    "Replication streams the log to standby servers.",
+    "Docker packages an application with its dependencies.",
+    "TLS encrypts traffic between a client and a server.",
+]
+
+DISAGREEMENTS = {
+    "The borrow checker permits programs that alias mutable state.": 1,
+    "The global interpreter lock lets two threads run bytecode at once.": 5,
+    "Decoherence extends how long a quantum state survives.": 7,
+    "Vacuum reclaims space held by rows that are still visible.": 9,
+}
+
+
+@needs_model
+def test_the_detector_is_precise_over_a_whole_registry():
+    """Two or three beliefs cannot show what this does to a real one.
+
+    `reconcile` retires beliefs off the back of these pairs, so a false
+    positive is not a noisy report — it takes a true belief out of recall. At a
+    looser gate this registry produced two: "TLS encrypts traffic between a
+    client and a server" against "Replication streams the log to standby
+    servers", on the strength of the word *server*.
+    """
+    with BeliefStore() as store:
+        beliefs = [Belief(statement=s) for s in REGISTRY]
+        expected = set()
+        for text, target in DISAGREEMENTS.items():
+            beliefs.append(Belief(statement=text))
+            expected.add(frozenset((beliefs[-1].id, beliefs[target].id)))
+        store.save_all(beliefs)
+
+        found = ReasoningEngine(store, detector=get_detector("nli")).contradictions(threshold=0.5)
+        pairs = {frozenset((c.a.id, c.b.id)) for c in found}
+
+        assert pairs == expected  # every planted one, and nothing else
+
+
+def test_the_lexical_detector_misses_these_and_that_is_the_point():
+    """The same registry through the default detector, for the contrast.
+
+    None of the disagreements above uses a negation word, so parity cannot see
+    them. This is what the model is for, and what it costs a model to buy.
+    """
+    with BeliefStore() as store:
+        store.save_all([Belief(statement=s) for s in REGISTRY + list(DISAGREEMENTS)])
+        found = ReasoningEngine(store, detector=LexicalDetector()).contradictions()
+        assert len(found) < len(DISAGREEMENTS)
+
+
 @needs_model
 def test_the_gate_is_a_precondition_not_a_detector():
     """It must not be doing the work — pairs it admits still have to be judged."""
