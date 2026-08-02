@@ -34,6 +34,32 @@ _MARKER = re.compile(r"^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s+)")
 MIN_WORDS = 4
 """Below this a fragment is a heading or a list bullet, not a claim."""
 
+_WORD = re.compile(r"[a-zA-Z0-9']+")
+_ENDS_A_SENTENCE = re.compile(r"[.!]$")
+
+
+def _long_enough(sentence: str) -> bool:
+    """Does this have enough words to be a claim rather than a heading?
+
+    Whitespace counting made "Rust is memory-safe." three words and dropped it,
+    while "Rust is memory safe." was four and survived — the same claim, kept or
+    lost on a hyphen. Compounds are common in exactly the technical prose this
+    reads, and a silently discarded claim is the worst failure the extractor
+    has: nothing downstream can tell a fact that was never learnt from one that
+    was never true.
+
+    Counting hyphenated parts everywhere would fix that and break the other
+    half, because it also inflates the fragments this is meant to reject —
+    "Well-known best-practice guide" becomes five words and reads as a claim.
+
+    So the looser count applies only to text that ends like a sentence.
+    Headings and list items are not punctuated; claims are. That keeps every
+    fragment currently rejected rejected, and only ever admits more.
+    """
+    words = len(_WORD.findall(sentence) if _ENDS_A_SENTENCE.search(sentence) else sentence.split())
+    return words >= MIN_WORDS
+
+
 MIN_CLAIM_WORDS = 3
 """Lower than MIN_WORDS, and deliberately so.
 
@@ -101,7 +127,7 @@ def rule_based_extract(text: str) -> list[str]:
     """Pull declarative claims out of text. Questions and fragments are dropped."""
     claims = []
     for s in split_sentences(text):
-        if s.endswith("?") or _NOISE.match(s) or len(s.split()) < MIN_WORDS:
+        if s.endswith("?") or _NOISE.match(s) or not _long_enough(s):
             continue
         claims.append(s)
     return claims

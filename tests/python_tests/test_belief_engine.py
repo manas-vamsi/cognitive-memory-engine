@@ -48,6 +48,33 @@ def test_extractor_drops_questions_headings_bullets_and_fragments():
     ]
 
 
+def test_a_claim_is_not_lost_to_a_hyphen():
+    """Same claim, kept or dropped on punctuation nobody thinks about.
+
+    Whitespace counting made "Rust is memory-safe." three words, under the
+    four-word floor, so it vanished at ingest while the unhyphenated wording
+    survived. A silently discarded claim is the worst failure the extractor has:
+    nothing downstream can tell a fact that was never learnt from one that was
+    never true.
+    """
+    assert rule_based_extract("Rust is memory-safe.") == ["Rust is memory-safe."]
+    assert rule_based_extract("The state-of-the-art model wins.") == [
+        "The state-of-the-art model wins."
+    ]
+
+
+def test_hyphens_do_not_promote_a_fragment_into_a_claim():
+    """The other half: counting hyphenated parts inflates fragments too.
+
+    "Well-known best-practice guide" reaches five words that way and would read
+    as a claim, so the looser count applies only to text that ends like a
+    sentence. Headings and list items are not punctuated; claims are.
+    """
+    assert rule_based_extract("Well-known best-practice guide") == []
+    assert rule_based_extract("- well-known best-practice") == []
+    assert rule_based_extract("Read-only mode") == []
+
+
 def test_normalise_ignores_case_punctuation_and_spacing():
     assert normalise("Rust, which is FAST,  is used.") == normalise("rust which is fast is used")
 
