@@ -89,15 +89,32 @@ easiest to verify.
 Extractor = Callable[[str], list[str]]
 
 
+_FENCE = re.compile(r"^\s*(?:```|~~~)")
+_HEADING = re.compile(r"^\s*#{1,6}\s+")
+_TABLE_ROW = re.compile(r"^\s*\|")
+
+
 def split_blocks(text: str) -> list[str]:
     """Group lines into blocks before any sentence splitting.
 
     Wrapped prose lines belong to one sentence and are joined; a heading, a
     bullet, or a blank line ends the block. Without this, `# Heading` glues onto
     the first real sentence and the claim comes out mangled.
+
+    Structure is dropped rather than read as prose. Run over this project's own
+    README, the extractor produced 280 "claims", of which 75 ended without a
+    full stop and 154 carried markdown markup: code-block contents, table rows,
+    and the heading "Cognitive Memory Engine (CME)" filed as a fact. Documents
+    with structure are the normal case for a memory engine, not the awkward one.
+
+    Headings are titles and never claims, so they end a block and contribute
+    nothing. Table rows are data whose meaning lives in a header this cannot
+    see. Fenced code is not prose at all. List items stay: "- Rust is fast." is
+    a claim wearing a bullet.
     """
     blocks: list[str] = []
     current: list[str] = []
+    fenced = False
 
     def flush() -> None:
         if current:
@@ -106,11 +123,20 @@ def split_blocks(text: str) -> list[str]:
 
     for raw in text.splitlines():
         line = raw.strip()
-        if not line:
+        if _FENCE.match(raw):
+            flush()
+            fenced = not fenced
+        elif fenced or _TABLE_ROW.match(raw) or _HEADING.match(raw) or not line:
+            # All of these end the paragraph above them and assert nothing
+            # themselves: fenced code, a table row, a title, a blank line.
             flush()
         elif _MARKER.match(raw):
+            # A bullet starts a block rather than being one, so a wrapped list
+            # item keeps its tail. Appending it whole truncated every bullet
+            # that ran past one line — "Decay — a disproven belief drops to zero
+            # confidence and leaves active" was a belief, missing "reasoning".
             flush()
-            blocks.append(_MARKER.sub("", raw).strip())
+            current.append(_MARKER.sub("", raw).strip())
         else:
             current.append(line)
     flush()
@@ -139,11 +165,40 @@ def split_sentences(text: str) -> list[str]:
     return out
 
 
+_DECORATION = [
+    (re.compile(r"\[([^\]]+)\]\([^)]*\)"), r"\1"),  # [text](url)
+    (re.compile(r"`([^`]+)`"), r"\1"),  # `code`
+    (re.compile(r"\*\*([^*]+)\*\*"), r"\1"),  # **bold**
+    (re.compile(r"__([^_]+)__"), r"\1"),  # __bold__
+    (re.compile(r"\*([^*]+)\*"), r"\1"),  # *italic*
+]
+
+
+def _plain(sentence: str) -> str:
+    """The sentence without its markdown decoration.
+
+    A belief's statement is read back to a model in `as_prompt`, and "**Evolve**
+    — confidence rises" is a worse fact than "Evolve — confidence rises" for no
+    gain. Duplicate detection already ignores punctuation, so this is about what
+    gets stored and shown rather than about matching.
+
+    Matched as spans rather than as loose markers, so an unpaired asterisk in
+    ordinary prose is left where it is instead of being quietly deleted.
+    """
+    for pattern, replacement in _DECORATION:
+        sentence = pattern.sub(replacement, sentence)
+    return " ".join(sentence.split())
+
+
 def rule_based_extract(text: str) -> list[str]:
     """Pull declarative claims out of text. Questions and fragments are dropped."""
     claims = []
-    for s in split_sentences(text):
-        if s.endswith("?") or _NOISE.match(s) or not _long_enough(s):
+    for sentence in split_sentences(text):
+        s = _plain(sentence)
+        # A colon introduces a list or a table; the claim, if any, is in what
+        # follows. "Six limitations of today's LLMs that CME targets directly:"
+        # asserts nothing on its own.
+        if s.endswith(("?", ":")) or _NOISE.match(s) or not _long_enough(s):
             continue
         claims.append(s)
     return claims

@@ -64,6 +64,60 @@ def test_a_claim_is_not_lost_to_a_hyphen():
     ]
 
 
+MARKDOWN = """
+# Cognitive Memory Engine
+
+A persistent cognition layer for language models.
+
+Six limitations this targets directly:
+
+| Field | Description |
+|---|---|
+| Statement | The factual claim |
+
+```
+Raw Text -> Chunks -> Embeddings
+```
+
+- **Decay** — a disproven belief drops to zero confidence and leaves active
+  reasoning.
+- Beliefs are stored in a `registry` that [persists](docs/store.md) between runs.
+"""
+
+
+def test_document_structure_is_not_mistaken_for_prose():
+    """Run over this project's own README the extractor filed the title as a fact.
+
+    280 "claims" came out of it: code-block contents, table rows, and the
+    heading "Cognitive Memory Engine (CME)". Documents with structure are the
+    normal case for a memory engine, not the awkward one.
+    """
+    claims = rule_based_extract(MARKDOWN)
+
+    assert not any(c.startswith("Cognitive Memory Engine") for c in claims)  # a title
+    assert not any("Raw Text" in c for c in claims)  # fenced code
+    assert not any("|" in c for c in claims)  # a table row
+    assert not any(c.endswith(":") for c in claims)  # a lead-in to a list
+
+
+def test_a_wrapped_list_item_keeps_its_tail():
+    """A bullet starts a block rather than being one.
+
+    Appended whole, every list item running past one line lost its ending:
+    "...leaves active" was a belief, missing "reasoning".
+    """
+    assert "Decay — a disproven belief drops to zero confidence and leaves active reasoning." in (
+        rule_based_extract(MARKDOWN)
+    )
+
+
+def test_markdown_decoration_does_not_reach_the_registry():
+    """A statement is read back to a model, so the markup is noise in a prompt."""
+    claims = rule_based_extract(MARKDOWN)
+    assert not any(t in c for c in claims for t in ("**", "`", "]("))
+    assert "Beliefs are stored in a registry that persists between runs." in claims
+
+
 def test_a_short_claim_is_extracted_as_readily_as_it_is_split_out():
     """The two floors disagreed about the same sentence.
 
