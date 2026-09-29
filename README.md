@@ -515,6 +515,40 @@ That annealing tracks exact search on the same QUBO is what makes research
 question 6 answerable: swap in a hardware backend and the comparison is
 already set up.
 
+**Quantum backends** (research question 6), same instances, `pip install .[quantum]`:
+
+| vars | states | backend | optimal | time | oracle calls: to the optimum / in all |
+|---|---|---|---|---|---|
+| 8 | 256 | annealing | 3/3 | 8 ms | |
+| 8 | 256 | QAOA | 3/3 | 2.7 s | |
+| 8 | 256 | Grover | 3/3 | 1 ms | 26 / 367 |
+| 12 | 4,096 | annealing | 3/3 | 19 ms | |
+| 12 | 4,096 | QAOA | 3/3 | 9.7 s | |
+| 12 | 4,096 | Grover | 3/3 | 19 ms | 153 / 1,457 |
+
+`CME_SOLVER=qaoa` runs a real Qiskit circuit (`qaoa_ansatz` over the QUBO's
+Pauli-Z Hamiltonian) on a statevector simulator, tunes it with COBYLA, and keeps
+the best affordable selection among 1,024 measured shots, which is what a device
+would report. Running on hardware means swapping the simulator for a sampler.
+Over 12 wider instances it matched exact search 10 times: depth 2 does not
+always get there.
+
+`CME_SOLVER=grover` is Durr and Hoyer's minimum finding. The oracle marks every
+selection below the best found so far and amplitude amplification makes one
+likely to be measured, simulated exactly from its measurement statistics rather
+than by building a circuit. It reaches the optimum in few oracle calls, but it
+cannot know it has, so it pays its 22.5 sqrt(N) guarantee in full: more calls
+than there are states at 8 qubits and a third of them at 12. The quadratic
+advantage is real and asymptotic.
+
+`CME_SOLVER=dwave` samples a real QPU when `DWAVE_API_TOKEN` is set and
+`dwave-system` is installed, and Ocean's classical sampler otherwise.
+
+None of them beats annealing at the sizes a context pool has. That is the
+answer so far to research question 6, and it will stay "so far" until one runs
+on hardware. Both simulators refuse problems past 16 variables, since they hold
+every state in memory.
+
 **Multi-step questions** (research questions 1 and 5). `python benchmarks/eval.py`
 builds a corpus of invented people, cities and countries, three facts to a
 paragraph, and asks 180 questions one, two and three facts deep ("What does the

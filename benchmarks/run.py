@@ -1,10 +1,11 @@
 """Measure the claims this project makes about itself.
 
-Three of them are currently assertions rather than numbers:
+Some of them were once assertions rather than numbers:
 
   1. The Rust core is faster than the Python graph  (README says so)
   2. Optimised selection beats a naive top-k slice  (research question 4)
   3. Quantum-style solvers rival exact search       (research question 6)
+  4. QAOA and Grover's search, measured on the same instances
 
 Run: python benchmarks/run.py [--scale 400]
 
@@ -15,6 +16,7 @@ what matter. Everything here is deterministic apart from the timings themselves.
 from __future__ import annotations
 
 import argparse
+import random
 import sys
 import time
 from pathlib import Path
@@ -195,15 +197,79 @@ def bench_solvers() -> None:
     print("  handing this QUBO to a quantum backend later.")
 
 
+def bench_quantum(instances: int = 3) -> None:
+    """Research question 6, measured: the quantum backends on the same instances."""
+    print("\n## Quantum backends vs exact search (research question 6)\n")
+    try:
+        import qiskit  # noqa: F401, PLC0415
+        import scipy  # noqa: F401, PLC0415
+    except ImportError:
+        print("  qiskit and scipy not installed - skipping. `pip install .[quantum]`")
+        return
+    from cme_python.engines.quantum_layer import (  # noqa: PLC0415
+        durr_hoyer,
+        energy_table,
+        grover_search,
+        qaoa,
+    )
+
+    print(f"  {instances} random selection instances per size, budget-constrained.")
+    print("  'optimal' counts instances where the backend matched exact search.\n")
+    print(
+        f"  {'vars':>4} {'states':>7} {'backend':<10} {'optimal':>8} {'time':>9}"
+        f" {'oracle calls: to the optimum / in all':>40}"
+    )
+    for n in (8, 12):
+        backends = {"annealing": simulated_annealing, "qaoa": qaoa, "grover": grover_search}
+        hits = dict.fromkeys(backends, 0)
+        times = dict.fromkeys(backends, 0.0)
+        found, spent = [], []
+        for seed in range(instances):
+            rng = random.Random(seed)
+            sims = {(i, j): rng.random() * 0.6 for i in range(n) for j in range(i + 1, n)}
+            qubo = build_selection_qubo([rng.random() for _ in range(n)], sims, redundancy=1.2)
+            feasible = budget_constraint([rng.randint(2, 6) for _ in range(n)], budget=12)
+            best = qubo.energy(solve_exhaustive(qubo, feasible))
+            for name, solver in backends.items():
+                start = time.perf_counter()
+                chosen = solver(qubo, feasible)
+                times[name] += (time.perf_counter() - start) * 1000 / instances
+                hits[name] += abs(qubo.energy(chosen) - best) < 1e-9
+            run = durr_hoyer(energy_table(qubo, feasible), seed=seed)
+            found.append(run.found_at)
+            spent.append(run.spent)
+        for name in backends:
+            calls = (
+                f"{sum(found) / instances:.0f} / {sum(spent) / instances:.0f}"
+                if name == "grover"
+                else ""
+            )
+            print(
+                f"  {n:>4} {2**n:>7} {name:<10} {hits[name]:>5}/{instances:<2}"
+                f" {times[name]:>7.0f}ms {calls:>40}"
+            )
+    print("\n  QAOA is a real Qiskit circuit, simulated: seconds per solve, and depth 2")
+    print("  does not always reach the optimum. Grover's search finds it in few oracle")
+    print("  calls but pays its 22.5 sqrt(N) guarantee in full: more calls than there are")
+    print("  states at 8 qubits, a third of them at 12. The quadratic advantage is real and")
+    print("  asymptotic. Neither beats annealing at these sizes; the comparison is set up")
+    print("  so that a hardware backend answers the question rather than an assertion.")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scale", type=int, default=400, help="synthetic beliefs to generate")
+    parser.add_argument(
+        "--skip-quantum", action="store_true", help="skip the slow simulated backends"
+    )
     args = parser.parse_args()
 
     print(f"CME benchmarks — scale={args.scale}, native graph={'yes' if AVAILABLE else 'no'}")
     bench_graph(args.scale)
     bench_selection(args.scale)
     bench_solvers()
+    if not args.skip_quantum:
+        bench_quantum()
     print()
     return 0
 
