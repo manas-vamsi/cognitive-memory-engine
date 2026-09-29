@@ -18,8 +18,9 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Sequence
 from itertools import combinations, product
+from typing import NamedTuple
 
-from cme_python.engines.evidence import EvidenceEngine, tokenise
+from cme_python.engines.evidence import EvidenceEngine, stem, tokenise
 from cme_python.models import Belief
 
 EXHAUSTIVE_LIMIT = 18
@@ -56,18 +57,27 @@ Feasible = Callable[[Sequence[int]], bool]
 Solver = Callable[[QUBO, Feasible], list[int]]
 
 
+class Candidate(NamedTuple):
+    """A belief up for selection, and what its relevance rests on."""
+
+    belief: Belief
+    relevance: float
+    """Everything it scored, retrieved and carried; what candidates are ranked by."""
+    via: str | None = None
+    """The belief it was reached from across the graph, if it was."""
+    carried: float = 0.0
+    """The part of `relevance` that is only worth anything if `via` is chosen too."""
+
+
+Expander = Callable[..., list[Candidate]]
+"""Widens retrieved candidates, e.g. `ReasoningEngine.expand` walking the graph."""
+
+
 def budget_constraint(costs: Sequence[float], budget: float) -> Feasible:
     def feasible(x: Sequence[int]) -> bool:
         return sum(c for c, on in zip(costs, x, strict=True) if on) <= budget
 
     return feasible
-
-
-def stem(word: str) -> str:
-    """Strip a plural/third-person `s` so `qubit` and `qubits` are one term."""
-    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
-        return word[:-1]
-    return word
 
 
 def jaccard(a: str, b: str) -> float:
@@ -90,11 +100,19 @@ def build_selection_qubo(
     similarities: dict[tuple[int, int], float],
     *,
     redundancy: float = 1.0,
+    links: dict[tuple[int, int], float] | None = None,
 ) -> QUBO:
     """Encode "pick a relevant but non-repetitive set" as a QUBO.
 
     Relevances are normalised to [0, 1] first so `redundancy` is a unit-free
     knob: at 1.0, two identical beliefs cancel out the value of keeping both.
+
+    `links` is the opposite coupling: value two beliefs only have together.
+    "Lyon is a city in Veloria" answers nothing about Alice unless "Alice was
+    born in Lyon" is in the context as well, so the relevance it carried across
+    the graph is a reward on the pair rather than on it alone. Redundancy says
+    two facts are worth less together; a link says a chain is worth more whole.
+    Same scale as the relevances.
     """
     q = QUBO(len(relevances))
     peak = max(relevances, default=0.0) or 1.0
@@ -106,6 +124,9 @@ def build_selection_qubo(
             continue
         overlap_value = (scaled[i] + scaled[j]) / 2
         q.add(i, j, redundancy * sim * overlap_value)  # penalty for repeating
+    for (i, j), value in (links or {}).items():
+        if value > 0 and i != j:
+            q.add(i, j, -value / peak)  # reward for completing a chain
     return q
 
 
@@ -228,9 +249,15 @@ def solve(qubo: QUBO, feasible: Feasible) -> list[int]:
 class OptimizationEngine:
     """Chooses which memories to spend the context budget on."""
 
-    def __init__(self, evidence: EvidenceEngine, solver: Solver = solve) -> None:
+    def __init__(
+        self,
+        evidence: EvidenceEngine,
+        solver: Solver = solve,
+        expand: Expander | None = None,
+    ) -> None:
         self.evidence = evidence
         self.solver = solver
+        self.expand = expand
 
     def select(
         self,
@@ -240,23 +267,39 @@ class OptimizationEngine:
         pool: int = 12,
         redundancy: float = 1.0,
         within: object | None = None,
+        hops: int = 0,
     ) -> list[Belief]:
         """The best *set* of beliefs for a query within a token budget.
 
         `budget` is in tokens, approximated by content-word count. `within`
-        restricts the candidates to one slice of memory.
+        restricts the candidates to one slice of memory. `hops` lets the
+        expander, when there is one, add beliefs the query reaches only across
+        the graph; they compete for the same `pool` places as the retrieved.
         """
-        candidates = self.evidence.retrieve(query, limit=pool, within=within)
+        retrieved = self.evidence.retrieve(query, limit=pool, within=within)
+        if hops and self.expand is not None and retrieved:
+            candidates = self.expand(retrieved, hops=hops, limit=pool, within=within)
+        else:
+            candidates = [Candidate(b, r) for b, r in retrieved]
         if not candidates:
             return []
-        beliefs = [b for b, _ in candidates]
-        relevances = [r for _, r in candidates]
+        beliefs = [c.belief for c in candidates]
+        index = {b.id: i for i, b in enumerate(beliefs)}
+        # Carried relevance is conditional on the belief it came through, so it
+        # moves off the diagonal onto that pair. A candidate whose link fell out
+        # of the pool keeps only what it earned on its own.
+        relevances = [c.relevance - c.carried for c in candidates]
+        links = {
+            (i, index[c.via]): c.carried
+            for i, c in enumerate(candidates)
+            if c.via in index and c.carried > 0
+        }
         costs = [self.cost(b) for b in beliefs]
         similarities = {
             (i, j): jaccard(beliefs[i].statement, beliefs[j].statement)
             for i, j in combinations(range(len(beliefs)), 2)
         }
-        qubo = build_selection_qubo(relevances, similarities, redundancy=redundancy)
+        qubo = build_selection_qubo(relevances, similarities, redundancy=redundancy, links=links)
         chosen = self.solver(qubo, budget_constraint(costs, budget))
         return [b for b, on in zip(beliefs, chosen, strict=True) if on]
 

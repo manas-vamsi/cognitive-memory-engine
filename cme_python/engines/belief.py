@@ -301,6 +301,48 @@ def normalise(statement: str) -> str:
     return " ".join(_NORMALISE.sub(" ", statement.lower()).split())
 
 
+_NAME_RUN = re.compile(r"\b[A-Z][A-Za-z0-9'-]*(?:[ \t]+[A-Z][A-Za-z0-9'-]*)*")
+_NOT_A_NAME = frozenset(
+    (  # noqa: SIM905 - a word list reads better as prose than as sixty quoted items
+        "a an the this that these those it its they their we our he she his her "
+        "there here what which who whom whose when where why how each every all "
+        "some most many any no not never in on at of for from by with and or but "
+        "if as so however also"
+    ).split()
+)
+
+
+def concepts_in(statement: str) -> list[str]:
+    """The named things a claim is about: runs of capitalised words.
+
+    This is what puts a belief into the Knowledge Graph without anyone tagging
+    it. "Alice Moreau was born in Lyon" and "Lyon is a city in Veloria" share
+    the concept Lyon, so the graph can walk from one to the other, which is
+    the step a question about Alice's country needs and a word search cannot
+    take.
+
+    Leading and trailing function words are stripped, so a sentence-initial
+    "The" never becomes a concept and "The Rhine" becomes "Rhine".
+
+    ponytail: capitalisation as a stand-in for named-entity recognition. It
+    misses lowercase technical terms (pass those as `connections`) and cannot
+    tell a name from a sentence-initial noun, which costs little because a
+    concept shared by many beliefs carries almost no weight across the graph.
+    A real NER pass is the upgrade.
+    """
+    found: list[str] = []
+    for match in _NAME_RUN.finditer(statement):
+        words = match.group().split()
+        while words and words[0].lower() in _NOT_A_NAME:
+            words.pop(0)
+        while words and words[-1].lower() in _NOT_A_NAME:
+            words.pop()
+        label = " ".join(words)
+        if label and label not in found:
+            found.append(label)
+    return found
+
+
 EXTRACT_SYSTEM = (
     "You extract factual claims from text for a knowledge base. "
     "Return one claim per line and nothing else — no numbering, no commentary. "
@@ -436,7 +478,7 @@ class BeliefEngine:
             b = Belief(statement=claim, confidence=prior, source=source)
             # The sentence is its own first evidence — every belief is traceable.
             b.evidence.append(Evidence(snippet=claim, source=source, locator=locator))
-            b.connect(*connections)
+            b.connect(*connections, *concepts_in(claim))
             beliefs.append(b)
         return beliefs
 

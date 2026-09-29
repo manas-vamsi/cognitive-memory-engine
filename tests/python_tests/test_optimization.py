@@ -88,6 +88,22 @@ def test_irrelevant_candidates_are_left_out():
     assert solve_exhaustive(qubo, ALWAYS) == [1, 0]
 
 
+def test_a_link_is_worth_nothing_alone_and_something_as_a_pair():
+    """A belief that only matters beside another is chosen with it, never without."""
+    links = {(1, 0): 0.4}
+    qubo = build_selection_qubo([1.0, 0.0], {}, redundancy=1.0, links=links)
+    assert solve_exhaustive(qubo, ALWAYS) == [1, 1]
+    # Its partner is unaffordable, so the linked belief has nothing to complete.
+    alone = build_selection_qubo([0.0, 0.0, 1.0], {}, redundancy=1.0, links={(1, 0): 0.4})
+    assert solve_exhaustive(alone, budget_constraint([5, 1, 1], budget=2)) == [0, 0, 1]
+
+
+def test_a_link_breaks_the_tie_between_two_equally_relevant_beliefs():
+    """Two export facts match the question alike; only one completes the chain."""
+    qubo = build_selection_qubo([1.0, 0.3, 0.3], {(1, 2): 0.5}, redundancy=1.0, links={(1, 0): 0.2})
+    assert solve_exhaustive(qubo, budget_constraint([1, 1, 1], budget=2)) == [1, 1, 0]
+
+
 def test_budget_forces_a_choice_between_two_good_beliefs():
     qubo = build_selection_qubo([1.0, 0.8], {(0, 1): 0.0}, redundancy=1.0)
     chosen = solve_exhaustive(qubo, budget_constraint([5, 5], budget=5))

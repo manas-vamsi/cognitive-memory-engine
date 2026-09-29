@@ -515,6 +515,48 @@ That annealing tracks exact search on the same QUBO is what makes research
 question 6 answerable: swap in a hardware backend and the comparison is
 already set up.
 
+**Multi-step questions** (research questions 1 and 5). `python benchmarks/eval.py`
+builds a corpus of invented people, cities and countries, three facts to a
+paragraph, and asks 180 questions one, two and three facts deep ("What does the
+country where X was born export?"). Invented, so no model can answer from what
+it already knows. Three systems, one 40-token budget:
+
+| facts needed | system | needed facts in context | every one of them | tokens |
+|---|---|---|---|---|
+| 1 | raw passages | 100% | 100% | 36 |
+| | beliefs | 100% | 100% | 16 |
+| | beliefs + graph | 100% | 100% | ~28 |
+| 2 | raw passages | 50% | 0% | 36 |
+| | beliefs | 50% | 0% | 16 |
+| | beliefs + graph | **100%** | **100%** | ~28 |
+| 3 | raw passages | ~48% | 0% | 36 |
+| | beliefs | ~40% | 0% | 16 |
+| | beliefs + graph | **~97%** | **~90%** | ~29 |
+
+"Raw passages" is what a retrieval-augmented pipeline does: rank paragraphs,
+fill the budget. It answers one-fact questions and no deeper ones, because the
+second fact never shares a word with the question. Beliefs alone are the same
+recall at less than half the tokens, since a belief is one fact where a passage
+is three. The graph walk is what gets past the first fact. Ties break on random
+belief ids, so the approximate rows move a few points between runs.
+
+Getting there took three fixes, each found by this benchmark rather than
+assumed. Retrieval did not stem, so "export" never matched "exports". Relevance
+carried across the graph was divided among a concept's beliefs, which compounded
+over hops until the third fact scored below noise. And a fact reached across the
+graph was priced as useful on its own, when "Lyon is a city in Veloria" answers
+nothing without "Alice was born in Lyon" beside it: carried relevance is now a
+coupling between the two in the QUBO, the opposite of the redundancy penalty.
+
+This is a clean corpus: plain sentences, named entities, no ambiguity. Real
+documents are messier, and the numbers above are an upper bound on what the
+walk does for them, not a forecast.
+
+Research question 3, whether this reduces hallucination, needs a model:
+`python benchmarks/eval.py --llm claude` asks each question with no memory and
+with CME's, and scores the answers for correctness and for claims `verify`
+cannot back.
+
 ## Research questions
 
 1. Can a system reason over structured **beliefs** instead of raw tokens?
@@ -572,6 +614,34 @@ with CME("cme.sqlite") as cme:
 A claim is only grounded if a belief is both **relevant** to it and **covers**
 it. Sharing a subject word is not evidence — that is why *"Qubits are powered by
 steam"* fails against a registry full of qubit facts.
+
+### Questions whose answer is two facts away
+
+Ask *"What does the country where Alice Moreau was born export?"* and a word
+search finds where Alice was born and nothing else, because no other fact shares
+the question's words. `context()` walks the Knowledge Graph from what retrieval
+found:
+
+```python
+cme.ingest("Alice Moreau was born in Lyon. Bruno Keller was born in Tarsk.")
+cme.ingest("Lyon is a city in Veloria. Tarsk is a city in Dornland.")
+cme.ingest("Veloria mainly exports copper. Dornland mainly exports timber.")
+
+q = "What does the country where Alice Moreau was born export?"
+cme.context(q, hops=0)  # Alice was born in Lyon, and that is all
+cme.context(q, hops=2)  # + Lyon is in Veloria, + Veloria exports copper
+```
+
+The graph fills itself. Ingest tags each belief with the named things it
+mentions (Lyon, Veloria), so beliefs about the same thing are linked without
+anyone passing `connections`. Relevance crosses a concept at half strength,
+divided among the beliefs sharing it, so a concept two facts mention is a strong
+link and one fifty mention is barely one. The walk respects `tier` and `scope`,
+and `CME_HOPS` (default 2) sets how far it goes.
+
+If the chosen facts contradict each other, the context says so rather than
+letting the model pick one silently: `context.conflicts` lists the clashes, and
+`as_prompt()` puts them in front of the model.
 
 ### Retrieval: lexical or vector
 

@@ -107,6 +107,24 @@ def tokenise(text: str) -> list[str]:
     return [w for w in _WORD.findall(text.lower()) if w not in _STOPWORDS and len(w) > 1]
 
 
+def stem(word: str) -> str:
+    """Strip a plural/third-person `s` so `qubit` and `qubits` are one term."""
+    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        return word[:-1]
+    return word
+
+
+def index_terms(text: str) -> list[str]:
+    """What lexical retrieval indexes and matches on: stemmed content words.
+
+    Stemmed because "What does Veloria export?" has to find "Veloria exports
+    copper", and unstemmed it shares no word with it at all. Kept apart from
+    `tokenise`, which the vector embedder hashes: changing that would silently
+    invalidate every persisted embedding.
+    """
+    return [stem(w) for w in tokenise(text)]
+
+
 class Justification(BaseModel):
     """Why the engine believes something, in a form a user can audit."""
 
@@ -204,7 +222,7 @@ class EvidenceEngine:
                 self._df.subtract(old.keys())
                 self._unpost(belief.id, old.keys())
             terms = Counter(
-                tokenise(" ".join([belief.statement, *(e.snippet for e in belief.evidence)]))
+                index_terms(" ".join([belief.statement, *(e.snippet for e in belief.evidence)]))
             )
             self._docs[belief.id] = terms
             self._df.update(terms.keys())
@@ -296,15 +314,15 @@ class EvidenceEngine:
             hits = self._retriever(query, limit)
             return [(b, r) for b, r in hits if within is None or within.matches(b)]
         self._fresh_index()
-        terms = tokenise(query)
-        if not terms:
+        wanted = index_terms(query)
+        if not wanted:
             return []
         # Only beliefs that share a term with the query can score above zero,
         # and the loop below already discarded the rest — so consult the
         # postings lists instead of walking the whole registry. Same results,
         # proportional to matches rather than to how much has ever been learnt.
         candidates: set[str] = set()
-        for term in set(terms):
+        for term in set(wanted):
             candidates |= self._postings.get(term, frozenset())
 
         idf = self._idf
@@ -318,7 +336,7 @@ class EvidenceEngine:
             if within is not None and not within.allows(meta.tier, meta.scope):
                 continue
             doc = self._docs[belief_id]
-            overlap = sum(doc[t] * idf.get(t, 0.0) for t in terms)
+            overlap = sum(doc[t] * idf.get(t, 0.0) for t in wanted)
             if overlap <= 0:
                 continue
             ranked.append((round((overlap / meta.norm) * meta.confidence, 6), belief_id))
@@ -379,11 +397,11 @@ class EvidenceEngine:
 
     def coverage(self, claim: str, belief: Belief) -> float:
         """Fraction of the claim's content words the belief accounts for."""
-        wanted = set(tokenise(claim))
+        wanted = set(index_terms(claim))
         if not wanted:
             return 0.0
         known = self._docs.get(belief.id) or Counter(
-            tokenise(" ".join([belief.statement, *(e.snippet for e in belief.evidence)]))
+            index_terms(" ".join([belief.statement, *(e.snippet for e in belief.evidence)]))
         )
         return round(len(wanted & set(known)) / len(wanted), 6)
 
