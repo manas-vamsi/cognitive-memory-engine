@@ -24,7 +24,12 @@ class Settings:
     """SQLite path for the belief registry. `:memory:` for an ephemeral run."""
 
     solver: str = os.environ.get("CME_SOLVER", "annealing")
-    """Optimization backend: exact, annealing, dwave, or qaoa."""
+    """Optimization backend: exact, annealing, dwave, qaoa, or grover.
+
+    Annealing is the default and the one to serve with. qaoa and grover are
+    simulated and exist to answer research question 6; qaoa takes seconds per
+    solve. dwave reaches a real QPU when DWAVE_API_TOKEN is set.
+    """
 
     context_budget: float = _float("CME_CONTEXT_BUDGET", 60)
     """Default token budget for a selected memory set."""

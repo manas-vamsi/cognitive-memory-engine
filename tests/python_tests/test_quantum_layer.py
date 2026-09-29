@@ -3,6 +3,7 @@
 Run: python tests/python_tests/test_quantum_layer.py
 """
 
+import random
 import sys
 from itertools import product
 from pathlib import Path
@@ -21,9 +22,15 @@ from cme_python.engines.optimization import (
 )
 from cme_python.engines.quantum_layer import (
     BACKENDS,
+    STATEVECTOR_LIMIT,
     bits_to_spins,
+    cost_hamiltonian,
+    durr_hoyer,
+    energy_table,
     get_solver,
+    grover_search,
     ising_energy,
+    qaoa,
     simulated_annealing,
     spins_to_bits,
     to_ising,
@@ -93,15 +100,93 @@ def test_get_solver_by_name_and_unknown_name_is_reported():
         get_solver("teleportation")
 
 
-def test_missing_hardware_backends_say_how_to_install_them():
-    """Absent qiskit/ocean must be a clear message, not an ImportError."""
-    for name in ("dwave", "qaoa"):
+def test_every_optional_backend_solves_or_says_how_to_install():
+    """Absent qiskit/ocean/numpy must be a clear message, not an ImportError."""
+    qubo = a_problem()
+    for name in ("dwave", "qaoa", "grover"):
         try:
-            BACKENDS[name](a_problem(), ALWAYS)
-        except NotImplementedError as exc:  # library present, circuit not built yet
-            assert "annealing" in str(exc)  # NB: subclasses RuntimeError, so catch it first
+            chosen = BACKENDS[name](qubo, ALWAYS)
         except RuntimeError as exc:
             assert "pip install" in str(exc)
+        else:
+            assert qubo.energy(chosen) == pytest.approx(qubo.energy(solve_exhaustive(qubo, ALWAYS)))
+
+
+def random_problem(seed: int, n: int) -> tuple[QUBO, object]:
+    rng = random.Random(seed)
+    sims = {(i, j): rng.random() * 0.6 for i in range(n) for j in range(i + 1, n)}
+    qubo = build_selection_qubo([rng.random() for _ in range(n)], sims, redundancy=1.2)
+    return qubo, budget_constraint([rng.randint(2, 6) for _ in range(n)], budget=12)
+
+
+def test_the_cost_hamiltonian_is_the_qubo_on_every_state():
+    """A circuit minimising the wrong operator would optimise the wrong thing."""
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("qiskit")
+    qubo, _ = random_problem(0, 5)
+    diagonal = np.real(np.diag(cost_hamiltonian(qubo).to_matrix())) + to_ising(qubo)[2]
+    assert np.allclose(diagonal, energy_table(qubo, ALWAYS))
+
+
+def test_the_energy_table_follows_qiskit_qubit_order():
+    pytest.importorskip("numpy")
+    qubo = QUBO(3)
+    qubo.add(0, 0, -1.0)  # only bit 0 matters
+    table = energy_table(qubo, ALWAYS)
+    assert [i for i in range(8) if table[i] == -1.0] == [1, 3, 5, 7]  # bit 0 = index & 1
+
+
+def test_infeasible_states_are_priced_out_of_the_table():
+    pytest.importorskip("numpy")
+    table = energy_table(a_problem(), budget_constraint([4, 4, 4], budget=5))
+    assert all(table[i] == float("inf") for i in (3, 5, 6, 7))  # two or more items
+
+
+def test_the_simulators_refuse_a_problem_too_big_to_hold():
+    pytest.importorskip("numpy")
+    with pytest.raises(ValueError, match="statevector"):
+        energy_table(QUBO(STATEVECTOR_LIMIT + 1), ALWAYS)
+
+
+def test_qaoa_finds_the_ground_state_within_the_budget():
+    pytest.importorskip("qiskit")
+    pytest.importorskip("scipy")
+    qubo, feasible = random_problem(1, 6)
+    chosen = qaoa(qubo, feasible)
+    assert feasible(chosen)
+    assert qubo.energy(chosen) == pytest.approx(qubo.energy(solve_exhaustive(qubo, feasible)))
+
+
+def test_grover_finds_the_ground_state_within_the_budget():
+    pytest.importorskip("numpy")
+    for seed in range(5):
+        qubo, feasible = random_problem(seed, 10)
+        chosen = grover_search(qubo, feasible, seed=seed)
+        assert feasible(chosen)
+        assert qubo.energy(chosen) == pytest.approx(qubo.energy(solve_exhaustive(qubo, feasible)))
+
+
+def test_grover_reaches_the_minimum_in_far_fewer_calls_than_there_are_states():
+    """The quadratic claim: well under N checks, where classical search needs N."""
+    pytest.importorskip("numpy")
+    qubo, feasible = random_problem(3, 12)
+    table = energy_table(qubo, feasible)
+    run = durr_hoyer(table, seed=3)
+    assert table[run.index] == table.min()
+    assert run.found_at < table.size / 10
+
+
+def test_grover_pays_its_guarantee_in_full():
+    """It cannot know it is done, so it spends the 22.5 sqrt(N) bound regardless."""
+    pytest.importorskip("numpy")
+    qubo, feasible = random_problem(3, 12)
+    run = durr_hoyer(energy_table(qubo, feasible), seed=3)
+    assert 22.5 * 64 <= run.spent < 22.5 * 64 + 64 + 1  # the bound, overshot by one attempt
+
+
+def test_quantum_backends_handle_an_empty_problem():
+    assert grover_search(QUBO(0), ALWAYS) == []
+    assert qaoa(QUBO(0), ALWAYS) == []
 
 
 def test_the_engine_accepts_a_quantum_backend_and_agrees_with_the_default():
