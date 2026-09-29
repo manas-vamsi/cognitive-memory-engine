@@ -54,6 +54,8 @@ class QUBO:
 
 Feasible = Callable[[Sequence[int]], bool]
 Solver = Callable[[QUBO, Feasible], list[int]]
+Expander = Callable[..., list[tuple[Belief, float]]]
+"""Widens retrieved candidates, e.g. `ReasoningEngine.expand` walking the graph."""
 
 
 def budget_constraint(costs: Sequence[float], budget: float) -> Feasible:
@@ -228,9 +230,15 @@ def solve(qubo: QUBO, feasible: Feasible) -> list[int]:
 class OptimizationEngine:
     """Chooses which memories to spend the context budget on."""
 
-    def __init__(self, evidence: EvidenceEngine, solver: Solver = solve) -> None:
+    def __init__(
+        self,
+        evidence: EvidenceEngine,
+        solver: Solver = solve,
+        expand: Expander | None = None,
+    ) -> None:
         self.evidence = evidence
         self.solver = solver
+        self.expand = expand
 
     def select(
         self,
@@ -240,13 +248,18 @@ class OptimizationEngine:
         pool: int = 12,
         redundancy: float = 1.0,
         within: object | None = None,
+        hops: int = 0,
     ) -> list[Belief]:
         """The best *set* of beliefs for a query within a token budget.
 
         `budget` is in tokens, approximated by content-word count. `within`
-        restricts the candidates to one slice of memory.
+        restricts the candidates to one slice of memory. `hops` lets the
+        expander, when there is one, add beliefs the query reaches only across
+        the graph; they compete for the same `pool` places as the retrieved.
         """
         candidates = self.evidence.retrieve(query, limit=pool, within=within)
+        if hops and self.expand is not None and candidates:
+            candidates = self.expand(candidates, hops=hops, limit=pool, within=within)
         if not candidates:
             return []
         beliefs = [b for b, _ in candidates]

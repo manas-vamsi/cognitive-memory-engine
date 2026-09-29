@@ -29,6 +29,14 @@ class Settings:
     context_budget: float = _float("CME_CONTEXT_BUDGET", 60)
     """Default token budget for a selected memory set."""
 
+    hops: int = int(_float("CME_HOPS", 2))
+    """How far `context()` walks the Knowledge Graph past what retrieval found.
+
+    Two covers a question whose answer is two facts away from anything it
+    names ("the country where Alice was born" needs where she was born, then
+    which country that city is in). Zero turns the walk off.
+    """
+
     min_confidence: float = _float("CME_MIN_CONFIDENCE", 0.0)
     """Beliefs below this are left out of retrieval and the graph."""
 

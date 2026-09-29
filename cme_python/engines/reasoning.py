@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
@@ -20,6 +21,9 @@ from cme_python.engines.native import graph_class
 from cme_python.engines.optimization import jaccard, stem
 from cme_python.models import Belief, Change
 from cme_python.store import BeliefStore
+
+if TYPE_CHECKING:
+    from cme_python.engines.memory import MemoryView
 
 _WORDS = re.compile(r"[a-z']+")
 _NEGATIONS = frozenset(
@@ -313,6 +317,72 @@ class ReasoningEngine:
             concepts=concepts,
             strength=graph.path_strength(path),
         )
+
+    def expand(
+        self,
+        seeds: list[tuple[Belief, float]],
+        *,
+        hops: int = 2,
+        limit: int = 12,
+        within: MemoryView | None = None,
+    ) -> list[tuple[Belief, float]]:
+        """Carry retrieval relevance across the graph to beliefs a query never named.
+
+        Retrieval finds "Alice Moreau was born in Lyon" for a question about the
+        country Alice was born in, and nothing else, because no other fact
+        shares the question's words. The next fact the answer needs, "Lyon is a
+        city in Veloria", is one concept away. This is that walk.
+
+        Relevance crosses a concept damped by `DAMPING` and divided among the
+        beliefs sharing it: a concept only two beliefs mention is a strong link,
+        one that fifty mention is barely one. That division is what keeps a
+        generic concept from flooding the candidates.
+
+        Each belief receives carried relevance once, at the hop nearest a seed,
+        and it adds to whatever retrieval already gave it: a fact reached both
+        by the question's words and across the graph is better supported than
+        one reached either way alone. The best `limit` come back, best first,
+        read fresh from the registry: the graph holds a snapshot, and a belief
+        reinforced since it was built would otherwise arrive with a stale
+        confidence.
+        """
+        graph = self.graph
+        found = {b.id: b for b, _ in seeds}
+        seed_ids = set(found)
+        score = {b.id: r for b, r in seeds}
+        received: set[str] = set()
+        frontier = dict(score)
+        for _ in range(hops):
+            carried: dict[str, float] = {}
+            for belief_id, relevance in frontier.items():
+                for concept in graph.neighbours(belief_node(belief_id)):
+                    others = [
+                        b
+                        for b in graph.beliefs_about(concept.key)
+                        if b.id != belief_id and (within is None or within.matches(b))
+                    ]
+                    for other in others:
+                        if other.id in received:
+                            continue
+                        share = relevance * DAMPING / len(others)
+                        if share > carried.get(other.id, 0.0):
+                            carried[other.id] = share
+                            found[other.id] = other
+            if not carried:
+                break
+            for belief_id, share in carried.items():
+                score[belief_id] = round(score.get(belief_id, 0.0) + share, 6)
+            received |= carried.keys()
+            frontier = carried
+        ranked = sorted(score.items(), key=lambda pair: (-pair[1], pair[0]))
+        out = []
+        for belief_id, relevance in ranked:
+            belief = self.store.get(belief_id) if belief_id not in seed_ids else found[belief_id]
+            if belief is not None and (within is None or within.matches(belief)):
+                out.append((belief, relevance))
+            if len(out) == limit:
+                break
+        return out
 
     def infer(self, belief_id: str, *, max_hops: int = 4, limit: int = 5) -> list[Chain]:
         """Reasoning chains from one belief out to everything it can reach."""

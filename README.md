@@ -573,6 +573,34 @@ A claim is only grounded if a belief is both **relevant** to it and **covers**
 it. Sharing a subject word is not evidence — that is why *"Qubits are powered by
 steam"* fails against a registry full of qubit facts.
 
+### Questions whose answer is two facts away
+
+Ask *"What does the country where Alice Moreau was born export?"* and a word
+search finds where Alice was born and nothing else, because no other fact shares
+the question's words. `context()` walks the Knowledge Graph from what retrieval
+found:
+
+```python
+cme.ingest("Alice Moreau was born in Lyon. Bruno Keller was born in Tarsk.")
+cme.ingest("Lyon is a city in Veloria. Tarsk is a city in Dornland.")
+cme.ingest("Veloria mainly exports copper. Dornland mainly exports timber.")
+
+q = "What does the country where Alice Moreau was born export?"
+cme.context(q, hops=0)  # Alice was born in Lyon, and that is all
+cme.context(q, hops=2)  # + Lyon is in Veloria, + Veloria exports copper
+```
+
+The graph fills itself. Ingest tags each belief with the named things it
+mentions (Lyon, Veloria), so beliefs about the same thing are linked without
+anyone passing `connections`. Relevance crosses a concept at half strength,
+divided among the beliefs sharing it, so a concept two facts mention is a strong
+link and one fifty mention is barely one. The walk respects `tier` and `scope`,
+and `CME_HOPS` (default 2) sets how far it goes.
+
+If the chosen facts contradict each other, the context says so rather than
+letting the model pick one silently: `context.conflicts` lists the clashes, and
+`as_prompt()` puts them in front of the model.
+
 ### Retrieval: lexical or vector
 
 ```bash

@@ -79,6 +79,7 @@ class ContextRequest(BaseModel):
     budget: float | None = Field(default=None, gt=0)
     tier: MemoryTier | None = None
     scope: str | None = None
+    hops: int | None = Field(default=None, ge=0, le=4)
 
 
 class VerifyRequest(BaseModel):
@@ -132,7 +133,11 @@ def ingest(request: IngestRequest) -> list[Belief]:
 def context(request: ContextRequest) -> GroundedContext:
     """The best grounded memories for a query, inside a token budget."""
     return get_engine().context(
-        request.query, budget=request.budget, tier=request.tier, scope=request.scope
+        request.query,
+        budget=request.budget,
+        tier=request.tier,
+        scope=request.scope,
+        hops=request.hops,
     )
 
 

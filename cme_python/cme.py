@@ -27,7 +27,12 @@ from cme_python.engines.graph import KnowledgeGraph
 from cme_python.engines.memory import DEFAULT_HALF_LIFE_DAYS, MemoryEngine, MemoryStats
 from cme_python.engines.optimization import OptimizationEngine
 from cme_python.engines.quantum_layer import get_solver
-from cme_python.engines.reasoning import Contradiction, ReasoningEngine, Resolution
+from cme_python.engines.reasoning import (
+    CONTRADICTION_AT,
+    Contradiction,
+    ReasoningEngine,
+    Resolution,
+)
 from cme_python.engines.vectors import VectorRetriever, cache_path_for
 from cme_python.models import Belief, MemoryTier, Revision, SourceKind
 from cme_python.store import open_store
@@ -40,6 +45,13 @@ class GroundedContext(BaseModel):
     beliefs: list[Belief]
     justifications: list[Justification]
     tokens: int
+    conflicts: list[str] = []
+    """Pairs among the chosen beliefs that contradict each other, explained.
+
+    Reported rather than resolved: which side to trust is `reconcile`'s call,
+    made on the whole registry's evidence, not this query's. But a model handed
+    two clashing facts without a warning will quietly pick one.
+    """
 
     def as_prompt(self) -> str:
         """The block to paste in front of a model, evidence included."""
@@ -52,6 +64,9 @@ class GroundedContext(BaseModel):
                 f"- {belief.statement} "
                 f"({belief.confidence:.0%} confident{'; ' + sources if sources else ''})"
             )
+        if self.conflicts:
+            lines.append("These facts contradict each other; weigh them, do not merge them:")
+            lines.extend(f"- {conflict}" for conflict in self.conflicts)
         return "\n".join(lines)
 
 
@@ -118,11 +133,13 @@ class CME:
             else None
         )
         self.evidence = EvidenceEngine(self.store, retriever=self._vectors)
-        self.optimizer = OptimizationEngine(
-            self.evidence, solver=get_solver(solver or settings.solver)
-        )
         self.reasoning = ReasoningEngine(
             self.store, detector=get_detector(detector or settings.detector, **self._embedder())
+        )
+        self.optimizer = OptimizationEngine(
+            self.evidence,
+            solver=get_solver(solver or settings.solver),
+            expand=self.reasoning.expand,
         )
         self.memory = MemoryEngine(self.store)
 
@@ -179,23 +196,31 @@ class CME:
         budget: float | None = None,
         tier: MemoryTier | None = None,
         scope: str | None = None,
+        hops: int | None = None,
     ) -> GroundedContext:
         """The best set of memories for a query, within a token budget.
 
-        Not a top-k slice: the Optimization Engine trades relevance against
-        redundancy so the budget buys distinct facts rather than the same one
-        three times. `tier` and `scope` confine recall to one body of memory.
+        The whole engine in one call. Retrieval finds what the query names; the
+        Reasoning Engine walks the Knowledge Graph `hops` concepts further for
+        what the query needs but never names; the Optimization Engine picks the
+        set, trading relevance against redundancy so the budget buys distinct
+        facts rather than the same one three times; and anything in that set
+        that contradicts itself is flagged. `tier` and `scope` confine recall to
+        one body of memory.
         """
         chosen = self.optimizer.select(
             query,
             budget=budget or settings.context_budget,
             within=self.memory.view(tier, scope) if tier or scope else None,
+            hops=settings.hops if hops is None else hops,
         )
+        clashes = self.reasoning.detector.clashes(chosen, CONTRADICTION_AT) if chosen else []
         return GroundedContext(
             query=query,
             beliefs=chosen,
             justifications=[self.evidence.justify(b) for b in chosen],
             tokens=sum(self.optimizer.cost(b) for b in chosen),
+            conflicts=[Contradiction(a=a, b=b, overlap=o).explain() for a, b, o in clashes],
         )
 
     def verify(
