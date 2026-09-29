@@ -515,6 +515,48 @@ That annealing tracks exact search on the same QUBO is what makes research
 question 6 answerable: swap in a hardware backend and the comparison is
 already set up.
 
+**Multi-step questions** (research questions 1 and 5). `python benchmarks/eval.py`
+builds a corpus of invented people, cities and countries, three facts to a
+paragraph, and asks 180 questions one, two and three facts deep ("What does the
+country where X was born export?"). Invented, so no model can answer from what
+it already knows. Three systems, one 40-token budget:
+
+| facts needed | system | needed facts in context | every one of them | tokens |
+|---|---|---|---|---|
+| 1 | raw passages | 100% | 100% | 36 |
+| | beliefs | 100% | 100% | 16 |
+| | beliefs + graph | 100% | 100% | ~28 |
+| 2 | raw passages | 50% | 0% | 36 |
+| | beliefs | 50% | 0% | 16 |
+| | beliefs + graph | **100%** | **100%** | ~28 |
+| 3 | raw passages | ~48% | 0% | 36 |
+| | beliefs | ~40% | 0% | 16 |
+| | beliefs + graph | **~97%** | **~90%** | ~29 |
+
+"Raw passages" is what a retrieval-augmented pipeline does: rank paragraphs,
+fill the budget. It answers one-fact questions and no deeper ones, because the
+second fact never shares a word with the question. Beliefs alone are the same
+recall at less than half the tokens, since a belief is one fact where a passage
+is three. The graph walk is what gets past the first fact. Ties break on random
+belief ids, so the approximate rows move a few points between runs.
+
+Getting there took three fixes, each found by this benchmark rather than
+assumed. Retrieval did not stem, so "export" never matched "exports". Relevance
+carried across the graph was divided among a concept's beliefs, which compounded
+over hops until the third fact scored below noise. And a fact reached across the
+graph was priced as useful on its own, when "Lyon is a city in Veloria" answers
+nothing without "Alice was born in Lyon" beside it: carried relevance is now a
+coupling between the two in the QUBO, the opposite of the redundancy penalty.
+
+This is a clean corpus: plain sentences, named entities, no ambiguity. Real
+documents are messier, and the numbers above are an upper bound on what the
+walk does for them, not a forecast.
+
+Research question 3, whether this reduces hallucination, needs a model:
+`python benchmarks/eval.py --llm claude` asks each question with no memory and
+with CME's, and scores the answers for correctness and for claims `verify`
+cannot back.
+
 ## Research questions
 
 1. Can a system reason over structured **beliefs** instead of raw tokens?

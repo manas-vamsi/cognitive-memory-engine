@@ -64,10 +64,10 @@ def test_walking_the_graph_finds_every_link_in_the_chain(cme):
     assert statements(cme.context(QUESTION, hops=2)) >= CHAIN
 
 
-def test_one_hop_reaches_the_city_but_not_the_country(cme):
-    found = statements(cme.context(QUESTION, hops=1))
-    assert "Lyon is a city in Veloria." in found
-    assert "Veloria mainly exports copper." not in found
+def test_one_hop_is_what_a_two_fact_question_takes(cme):
+    question = "Which country was Alice Moreau born in?"
+    assert "Lyon is a city in Veloria." not in statements(cme.context(question, hops=0))
+    assert "Lyon is a city in Veloria." in statements(cme.context(question, hops=1))
 
 
 def test_a_rare_concept_carries_more_than_a_common_one():
@@ -77,12 +77,25 @@ def test_a_rare_concept_carries_more_than_a_common_one():
         engine.ingest("Kelp grows along the coast of Brel.")
         for n in range(8):
             engine.ingest(f"Moss grows on the walls of Town{n}.")
+        for n in range(10):  # so Moss is common, not universal
+            engine.ingest(f"Ferry{n} crosses the strait at dawn.")
         seeds = engine.evidence.retrieve("Nora Vale", limit=1)
-        carried = {b.statement: r for b, r in engine.reasoning.expand(seeds, hops=1)}
+        expanded = engine.reasoning.expand(seeds, hops=1)
+        carried = {c.belief.statement: c.relevance for c in expanded}
         assert (
             carried["Moss grows on the walls of Town0."]
             < carried["Kelp grows along the coast of Brel."]
         )
+
+
+def test_a_concept_most_of_the_registry_shares_is_not_walked():
+    """Every belief mentions Note: crossing it would reach everything, meaning nothing."""
+    with CME(":memory:") as engine:
+        for n in range(6):
+            engine.ingest(f"Note {n} says the Harbor{n} gate opens at noon.")
+        seeds = engine.evidence.retrieve("Harbor0 gate", limit=1)
+        reached = {c.belief.statement for c in engine.reasoning.expand(seeds, hops=1)}
+        assert reached == {"Note 0 says the Harbor0 gate opens at noon."}
 
 
 def test_the_walk_stays_inside_the_requested_scope(cme):

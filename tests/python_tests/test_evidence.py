@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import pytest
 
-from cme_python.engines.evidence import EvidenceEngine, tokenise
+from cme_python.engines.evidence import EvidenceEngine, index_terms, tokenise
 from cme_python.models import Belief, Evidence, SourceKind
 from cme_python.store import BeliefStore
 
@@ -32,6 +32,15 @@ def engine():
         )
         store.save_all([q, r])
         yield EvidenceEngine(store)
+
+
+def test_retrieval_matches_across_a_plural():
+    """ "export" must find "exports": unstemmed, the two share no term."""
+    with BeliefStore() as store:
+        store.save(Belief(statement="Veloria mainly exports copper."))
+        hits = EvidenceEngine(store).retrieve("What does Veloria export?")
+        assert hits
+        assert index_terms("Veloria exports") == index_terms("veloria export")
 
 
 def test_tokenise_drops_stopwords_and_single_chars():
@@ -132,7 +141,7 @@ def test_postings_shortcut_matches_a_full_scan(engine):
     engine._fresh_index()
 
     query = "qubits rust databases"
-    terms = tokenise(query)
+    terms = index_terms(query)
     brute = []
     for belief_id, doc in engine._docs.items():
         overlap = sum(doc[t] * engine._idf.get(t, 0.0) for t in terms)
